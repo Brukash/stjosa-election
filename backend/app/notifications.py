@@ -1,4 +1,4 @@
-"""OTP delivery over email, SMS and WhatsApp.
+"""OTP and registration-notice delivery over email, SMS and WhatsApp.
 
 Security rules enforced here:
   * The OTP is sent to the contact on the approved register, never to a value
@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .models import Election, NotificationDelivery, Voter
+from .services import now
 
 RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 CHANNEL_LABELS = {"email": "Email", "sms": "SMS", "whatsapp": "WhatsApp", "development": "Development"}
@@ -217,9 +218,13 @@ def provider_status() -> list[dict]:
                 "WHATSAPP_ACCESS_TOKEN",
                 "WHATSAPP_PHONE_NUMBER_ID",
                 "WHATSAPP_TEMPLATE_NAME",
+                "WHATSAPP_REGISTRATION_TEMPLATE_NAME",
             ],
             "template": settings.whatsapp_template_name,
             "template_language": settings.whatsapp_template_language,
+            "registration_template": settings.whatsapp_registration_template_name,
+            "registration_template_language": settings.whatsapp_registration_template_language,
+            "registration_configured": settings.whatsapp_registration_configured,
             "consent_required": True,
             "delivery_status_webhook": {
                 "url": f"{settings.api_origin}/api/webhooks/whatsapp",
@@ -457,6 +462,206 @@ def _send_whatsapp(destination: str, otp: str) -> tuple[str | None, str | None]:
         return None, "whatsapp provider returned an invalid response"
 
 
+# ── registration notices ─────────────────────────────────────────────────────
+def _registration_email_body(election: Election, voter: Voter) -> tuple[str, str, str]:
+    link = f"{settings.app_origin.rstrip('/')}/accredit"
+    subject = f"{election.reference}: You are registered to vote"
+    text = (
+        f"Dear {voter.full_name},\n\n"
+        f"You have been approved on the electoral register for {election.title}.\n"
+        f"Your Voter ID is {voter.voter_id}.\n\n"
+        f"To accredit, open {link} and enter your Voter ID. You will receive a one-time "
+        f"password before you can receive your voting credential.\n\n"
+        f"Do not share your OTP with anyone. Officials will never ask you for it.\n\n"
+        f"St. John's College Jos Alumni Election"
+    )
+    html_body = f"""<!doctype html><html><body style="margin:0;background:#F4F6F2;font-family:Arial,sans-serif;color:#1E2A22">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden">
+<tr><td style="background:#0F3D2E;padding:22px 26px;color:#fff;font-size:18px;font-weight:700">St. John's College Jos Alumni Election</td></tr>
+<tr><td style="height:5px;background:#E7D21C;font-size:0;line-height:0">&nbsp;</td></tr>
+<tr><td style="padding:26px">
+<p style="margin:0 0 12px;font-size:15px">Dear {html.escape(voter.full_name)},</p>
+<p style="margin:0 0 12px;font-size:14px;line-height:1.6">You have been approved on the electoral register for <strong>{html.escape(election.title)}</strong>.</p>
+<p style="margin:0 0 18px;font-size:14px">Your Voter ID is <strong style="font-family:Consolas,monospace">{html.escape(voter.voter_id)}</strong>.</p>
+<p style="margin:0 0 18px;font-size:14px;line-height:1.6">To accredit, open the accreditation page and enter your Voter ID. You will receive a one-time password before you can receive your voting credential.</p>
+<p style="margin:0 0 18px"><a href="{html.escape(link)}" style="display:inline-block;background:#0F3D2E;color:#fff;text-decoration:none;padding:11px 18px;border-radius:7px;font-size:14px;font-weight:600">Open accreditation</a></p>
+<p style="margin:0;font-size:13px;color:#55635A">Never share your OTP with anyone. Officials will never ask you for it.</p>
+</td></tr>
+<tr><td style="background:#EEF4EC;padding:16px 26px;font-size:11px;color:#55635A">This message never asks for your ballot choices.</td></tr>
+</table></td></tr></table></body></html>"""
+    return subject, text, html_body
+
+
+def _send_registration_email(voter: Voter, election: Election) -> DeliveryResult:
+    destination = (voter.email or "").strip()
+    provider = _email_provider()
+    try:
+        subject, text, html_body = _registration_email_body(election, voter)
+        if provider == "smtp":
+            message_id, error = _send_smtp(destination, subject, text)
+        elif provider == "resend":
+            message_id, error = _send_resend(destination, subject, text, html_body)
+        else:
+            message_id, error = None, "email provider is not configured"
+    except Exception as exc:
+        message_id, error = None, f"email delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="email",
+        provider=provider or "none",
+        status="failed" if error else "sent",
+        recipient_masked=mask_email(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
+
+
+def _send_registration_whatsapp(
+    voter: Voter, election: Election, destination: str
+) -> DeliveryResult:
+    """Send the approved registration utility template through Meta Cloud API."""
+    to = "".join(ch for ch in destination if ch.isdigit())
+    parameters = [
+        {"type": "text", "text": voter.full_name},
+        {"type": "text", "text": election.title},
+        {"type": "text", "text": voter.voter_id},
+    ]
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": settings.whatsapp_registration_template_name,
+            "language": {"code": settings.whatsapp_registration_template_language},
+            "components": [{"type": "body", "parameters": parameters}],
+        },
+    }
+    url = f"{settings.whatsapp_api_base}/{settings.whatsapp_phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {settings.whatsapp_access_token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        with httpx.Client(timeout=settings.otp_delivery_timeout_seconds) as client:
+            response = _post_with_retry(client, url, json=payload, headers=headers)
+        if response.status_code >= 300:
+            message_id, error = None, f"whatsapp provider rejected the message ({response.status_code})"
+        else:
+            messages = response.json().get("messages") or []
+            message_id = str(messages[0].get("id") or "") if messages else ""
+            error = None if message_id else "whatsapp provider did not confirm a message id"
+    except Exception as exc:
+        message_id, error = None, f"whatsapp delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="whatsapp",
+        provider="meta",
+        status="failed" if error else "sent",
+        recipient_masked=mask_phone(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
+
+
+def notify_registered_voters(
+    db: Session,
+    *,
+    election: Election,
+    voters: list[Voter],
+    request_ip: str | None = None,
+) -> dict:
+    """Send one registration notice per approved voter and channel.
+
+    Email and WhatsApp are tracked separately. A channel that already succeeded
+    is not sent again, while a failed or unavailable channel can be retried on
+    a later register approval. Notifications never block register approval.
+    """
+    summary = {
+        "voters": 0,
+        "email_sent": 0,
+        "email_failed": 0,
+        "email_unavailable": 0,
+        "email_already_sent": 0,
+        "whatsapp_sent": 0,
+        "whatsapp_failed": 0,
+        "whatsapp_unavailable": 0,
+        "whatsapp_no_consent": 0,
+        "whatsapp_already_sent": 0,
+    }
+    attempts: list[tuple[str, Voter, str]] = []
+
+    for voter in voters:
+        if not voter.is_eligible or voter.register_status != "approved":
+            continue
+        summary["voters"] += 1
+
+        if voter.registration_email_sent_at:
+            summary["email_already_sent"] += 1
+        elif not (voter.email or "").strip() or not settings.email_configured:
+            summary["email_unavailable"] += 1
+        else:
+            attempts.append(("email", voter, (voter.email or "").strip()))
+
+        phone = _normalise_phone(voter.phone or "")
+        if voter.registration_whatsapp_sent_at:
+            summary["whatsapp_already_sent"] += 1
+        elif not voter.whatsapp_consent:
+            summary["whatsapp_no_consent"] += 1
+        elif not phone or not settings.whatsapp_registration_configured:
+            summary["whatsapp_unavailable"] += 1
+        else:
+            attempts.append(("whatsapp", voter, phone))
+
+    if not attempts:
+        return summary
+
+    with ThreadPoolExecutor(max_workers=min(8, len(attempts))) as executor:
+        futures = {}
+        for channel, voter, destination in attempts:
+            if channel == "email":
+                futures[executor.submit(_send_registration_email, voter, election)] = (channel, voter)
+            else:
+                futures[executor.submit(_send_registration_whatsapp, voter, election, destination)] = (
+                    channel, voter
+                )
+        for future, (channel, voter) in futures.items():
+            try:
+                result = future.result()
+            except Exception as exc:
+                result = DeliveryResult(
+                    channel=channel,
+                    provider="unknown",
+                    status="failed",
+                    recipient_masked="***",
+                    error=f"notification worker failed ({type(exc).__name__})",
+                )
+            if result.status == "sent":
+                summary[f"{channel}_sent"] += 1
+                if channel == "email":
+                    voter.registration_email_sent_at = now()
+                else:
+                    voter.registration_whatsapp_sent_at = now()
+            else:
+                summary[f"{channel}_failed"] += 1
+            db.add(
+                NotificationDelivery(
+                    election_id=election.id,
+                    voter_row_id=voter.id,
+                    challenge_id=None,
+                    purpose="registration",
+                    channel=result.channel,
+                    provider=result.provider,
+                    status=result.status,
+                    recipient_masked=result.recipient_masked,
+                    provider_message_id=result.provider_message_id,
+                    error=(result.error or "")[:300] or None,
+                    request_ip=request_ip,
+                )
+            )
+    db.commit()
+    return summary
+
+
 # ── entry point ─────────────────────────────────────────────────────────────
 def _destination_for(voter: Voter, channel: str) -> str | None:
     if channel == "email":
@@ -620,6 +825,7 @@ def deliver_otp_all(
                 election_id=election.id,
                 voter_row_id=voter.id,
                 challenge_id=challenge_id,
+                purpose="otp",
                 channel=result.channel,
                 provider=result.provider,
                 status=result.status,

@@ -119,11 +119,20 @@ destinations. The accreditation screen calls `POST /api/accreditation/request-ot
 | Email | Any SMTP relay | `EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` |
 | SMS | Termii | `SMS_PROVIDER=termii`, `TERMII_API_KEY`, `TERMII_SENDER_ID`, `TERMII_CHANNEL=dnd` |
 | WhatsApp | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, approved authentication `WHATSAPP_TEMPLATE_NAME`, `WHATSAPP_TEMPLATE_LANGUAGE` |
+| WhatsApp registration notices | Meta | separate approved **utility** `WHATSAPP_REGISTRATION_TEMPLATE_NAME`, `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE` |
 | WhatsApp status webhook | Meta | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` |
 
 Twilio remains only as a legacy SMS fallback (`SMS_PROVIDER=twilio`); new deployments should use
 Termii's transactional `dnd` channel. WhatsApp requires a recorded `whatsapp_consent` opt-in and an
 approved Meta authentication template; it never uses a personal account or browser automation.
+
+When the Chairman approves the register, each eligible voter is also sent a registration notice by
+email and WhatsApp. Email requires a registered address; WhatsApp requires consent, a mobile number
+and a separate approved **utility** template (`sjc_registration_confirmation` by default, with three
+body parameters: voter name, election title and Voter ID). WhatsApp authentication templates must not
+be used for these notices. Each channel is recorded independently, so a repeated approval does not
+resend a notice that already succeeded, while a failed or unavailable channel can be retried by
+approving again. Approval itself succeeds even when a notification provider fails.
 
 Behaviour:
 

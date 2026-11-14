@@ -152,6 +152,8 @@ class Voter(Base, TimestampMixin):
     is_eligible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     register_status: Mapped[str] = mapped_column(String(20), default="imported", nullable=False)
     imported_by: Mapped[str | None] = mapped_column(ForeignKey("profiles.id"))
+    registration_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    registration_whatsapp_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # ── Accreditation ────────────────────────────────────────────────────────────
@@ -171,7 +173,7 @@ class OtpChallenge(Base):
 
 
 class NotificationDelivery(Base):
-    """OTP delivery attempt audit. Never contains the OTP itself."""
+    """OTP and registration-notice delivery audit. Never contains a code."""
 
     __tablename__ = "notification_deliveries"
 
@@ -179,6 +181,7 @@ class NotificationDelivery(Base):
     election_id: Mapped[str] = mapped_column(ForeignKey("elections.id"), nullable=False, index=True)
     voter_row_id: Mapped[str | None] = mapped_column(ForeignKey("voters.id"))
     challenge_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    purpose: Mapped[str] = mapped_column(String(20), default="otp", nullable=False)
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
     provider: Mapped[str] = mapped_column(String(30), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)

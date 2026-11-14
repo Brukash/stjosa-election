@@ -153,12 +153,14 @@ def overview(
     otp_sent = db.scalar(
         select(func.count(NotificationDelivery.id)).where(
             NotificationDelivery.election_id == election.id,
+            NotificationDelivery.purpose == "otp",
             NotificationDelivery.status.in_(["sent", "delivered", "read"]),
         )
     ) or 0
     otp_failed_delivery = db.scalar(
         select(func.count(NotificationDelivery.id)).where(
             NotificationDelivery.election_id == election.id,
+            NotificationDelivery.purpose == "otp",
             NotificationDelivery.status == "failed",
         )
     ) or 0
@@ -171,7 +173,10 @@ def overview(
             NotificationDelivery.status,
             func.count(NotificationDelivery.id),
         )
-        .where(NotificationDelivery.election_id == election.id)
+        .where(
+            NotificationDelivery.election_id == election.id,
+            NotificationDelivery.purpose == "otp",
+        )
         .group_by(NotificationDelivery.channel, NotificationDelivery.status)
     ).all()
     by_channel: dict[str, dict[str, int]] = {
@@ -190,6 +195,7 @@ def overview(
     last_delivery_failure = db.execute(
         select(NotificationDelivery).where(
             NotificationDelivery.election_id == election.id,
+            NotificationDelivery.purpose == "otp",
             NotificationDelivery.status == "failed",
         ).order_by(NotificationDelivery.created_at.desc())
     ).scalars().first()

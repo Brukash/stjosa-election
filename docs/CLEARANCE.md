@@ -9,7 +9,7 @@ certification and must be signed off by people outside the development team.**
 | Gate | Status | Evidence |
 | --- | --- | --- |
 | Functional mock election | Passed | `backend/scripts/smoke_test.py` — full suite: accreditation, credential, challenge, cast, receipts, commitments, dual-control count, declaration, audit report |
-| OTP delivery | Passed against mock providers | `backend/scripts/test_otp_delivery.py` — 14 checks covering simultaneous one-OTP fan-out through Resend, Termii and Meta WhatsApp, partial/all-provider failure, expiry, duplicate accreditation, cooldown, consent, monitoring and abuse controls; no live provider credentials used |
+| OTP delivery | Passed against mock providers | `backend/scripts/test_otp_delivery.py` — 16 checks covering simultaneous one-OTP fan-out through Resend, Termii and Meta WhatsApp, partial/all-provider failure, expiry, duplicate accreditation, cooldown, consent, monitoring and abuse controls; registration approval notices by email and WhatsApp utility template, consent handling and repeat-approval idempotency; no live provider credentials used |
 | MFA | Passed | Enrol → activate → login without code (401), wrong code (401), correct code (200); UI at `/admin/security` |
 | Verification settings independence | Passed | Same official cannot configure and approve; second official approval enforced; smoke check |
 | Deployment preflight | Passed locally | `python scripts/preflight.py` → READY (31 tables, no production issues in development) |

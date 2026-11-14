@@ -52,6 +52,9 @@ not select a channel, and every destination is taken from the approved register.
 
 The additive migration `supabase/migrations/0003_otp_channels.sql` adds the voter WhatsApp consent
 column. The API also applies that additive column defensively at startup for older deployments.
+Registration notices use `supabase/migrations/0004_registration_notifications.sql` for per-channel
+sent timestamps and a `purpose` column on `notification_deliveries`; the API adds those columns
+defensively as well.
 
 ### Email — Resend (recommended)
 
@@ -95,6 +98,26 @@ column. The API also applies that additive column defensively at startup for old
    `notification_deliveries`; no OTP is included.
 6. Send a test authentication template to a consented committee number and confirm delivery before
    the election. The Super Administrator can inspect readiness and limits at `/admin/delivery`.
+
+### Registration notices on register approval
+
+Approving the register sends one email and one WhatsApp registration notice to each eligible voter.
+This is separate from the OTP flow:
+
+1. Create a second, **Utility** template (for example `sjc_registration_confirmation`, language
+   `en_US`). Its body must use three parameters in this order: `{{1}}` voter full name, `{{2}}`
+   election title and `{{3}}` Voter ID. Do not reuse the OTP authentication template.
+2. Set `WHATSAPP_REGISTRATION_TEMPLATE_NAME` and
+   `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE`. The template must be approved by Meta before the
+   election; otherwise the WhatsApp channel is recorded as failed/unavailable and email still sends.
+3. Email uses the same Resend/SMTP provider and sender configured above. A voter without an email
+   address is reported as email-unavailable and is not sent a message.
+4. WhatsApp still requires recorded `whatsapp_consent`. Without consent the channel is reported as
+   unavailable and no WhatsApp message is attempted.
+5. Successful channels are timestamped on the voter (`registration_email_sent_at`,
+   `registration_whatsapp_sent_at`). Approving the register again retries only channels that have not
+   succeeded, so repeated approval does not spam voters. Approval is committed before notifications,
+   and provider failures are recorded without cancelling the approval.
 
 ### Production guard and preflight
 

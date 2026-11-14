@@ -34,29 +34,35 @@ from .routers import (
 from .seed import seed_database
 
 
+def _ensure_column(table: str, column: str, postgres_type: str, sqlite_type: str) -> None:
+    """Add one additive column when an older database lacks it."""
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return
+    if column in {item["name"] for item in inspector.get_columns(table)}:
+        return
+    if engine.dialect.name == "postgresql":
+        statement = f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {postgres_type}"
+    else:
+        statement = f"ALTER TABLE {table} ADD COLUMN {column} {sqlite_type}"
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(statement))
+    except Exception:
+        # A concurrent serverless instance may have added it first.
+        refreshed = {item["name"] for item in inspect(engine).get_columns(table)}
+        if column not in refreshed:
+            raise
+
+
 def _ensure_compatibility_columns() -> None:
     """Apply additive schema changes that create_all cannot add to old tables."""
-    inspector = inspect(engine)
-    if "voters" not in inspector.get_table_names():
-        return
-    columns = {column["name"] for column in inspector.get_columns("voters")}
-    if "whatsapp_consent" not in columns:
-        statement = (
-            "ALTER TABLE voters ADD COLUMN IF NOT EXISTS whatsapp_consent "
-            "BOOLEAN NOT NULL DEFAULT FALSE"
-            if engine.dialect.name == "postgresql"
-            else "ALTER TABLE voters ADD COLUMN whatsapp_consent BOOLEAN NOT NULL DEFAULT FALSE"
-        )
-        try:
-            with engine.begin() as connection:
-                connection.execute(text(statement))
-        except Exception:
-            # A concurrent serverless instance may have added it first.
-            refreshed = {
-                column["name"] for column in inspect(engine).get_columns("voters")
-            }
-            if "whatsapp_consent" not in refreshed:
-                raise
+    _ensure_column("voters", "whatsapp_consent", "BOOLEAN NOT NULL DEFAULT FALSE",
+                   "BOOLEAN NOT NULL DEFAULT FALSE")
+    _ensure_column("voters", "registration_email_sent_at", "TIMESTAMPTZ", "DATETIME")
+    _ensure_column("voters", "registration_whatsapp_sent_at", "TIMESTAMPTZ", "DATETIME")
+    _ensure_column("notification_deliveries", "purpose",
+                   "VARCHAR(20) NOT NULL DEFAULT 'otp'", "VARCHAR(20) NOT NULL DEFAULT 'otp'")
 
 
 def _materialize_keys() -> None:

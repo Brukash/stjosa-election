@@ -89,6 +89,15 @@ class Settings:
     ).rstrip("/")
     whatsapp_template_name: str = os.getenv("WHATSAPP_TEMPLATE_NAME", "sjc_election_otp")
     whatsapp_template_language: str = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en_US")
+    # Registration notices are utility templates, separate from the OTP
+    # authentication template. Parameters: {{1}} name, {{2}} election title,
+    # {{3}} Voter ID.
+    whatsapp_registration_template_name: str = os.getenv(
+        "WHATSAPP_REGISTRATION_TEMPLATE_NAME", "sjc_registration_confirmation"
+    )
+    whatsapp_registration_template_language: str = os.getenv(
+        "WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE", "en_US"
+    )
     whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "")
     whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
 
@@ -149,6 +158,15 @@ class Settings:
             self.whatsapp_access_token
             and self.whatsapp_phone_number_id
             and self.whatsapp_template_name
+        )
+
+    @property
+    def whatsapp_registration_configured(self) -> bool:
+        return bool(
+            self.whatsapp_provider.strip().lower() == "meta"
+            and self.whatsapp_access_token
+            and self.whatsapp_phone_number_id
+            and self.whatsapp_registration_template_name
         )
 
     @property

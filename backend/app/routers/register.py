@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import client_ip, record_audit, require_permission, roles_for
 from ..models import AccreditationRecord, Election, ElectionEvent, Profile, Voter
+from ..notifications import notify_registered_voters
 from ..schemas import EligibilityUpdate, RegisterImport, VoterCreate
 from ..services import election_stats, get_election
 
@@ -224,4 +225,27 @@ def approve_register(
                  entity="voter_register", ip_address=client_ip(request),
                  detail={"approved": len(eligible), "excluded": len(voters) - len(eligible)})
     db.commit()
-    return {"approved": len(eligible), "excluded": len(voters) - len(eligible)}
+
+    # Approval is the point at which a voter is registered to vote. Send the
+    # notice after committing the approval so a provider failure cannot undo it.
+    try:
+        notifications = notify_registered_voters(
+            db, election=election, voters=eligible, request_ip=client_ip(request)
+        )
+    except Exception as exc:
+        db.rollback()
+        notifications = {
+            "voters": len(eligible),
+            "error": f"registration notices failed ({type(exc).__name__})",
+        }
+    if notifications.get("voters"):
+        record_audit(
+            db, action="register.notify", election_id=election.id, actor_id=profile.id,
+            entity="voter_register", ip_address=client_ip(request), detail=notifications,
+        )
+        db.commit()
+    return {
+        "approved": len(eligible),
+        "excluded": len(voters) - len(eligible),
+        "notifications": notifications,
+    }

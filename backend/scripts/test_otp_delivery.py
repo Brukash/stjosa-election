@@ -1,4 +1,4 @@
-"""End-to-end simultaneous OTP accreditation tests.
+"""End-to-end OTP and registration-notice delivery tests.
 
 Runs the real FastAPI app against a temporary SQLite database and local mock
 providers for Resend, Termii and Meta WhatsApp. No real credentials are used.
@@ -422,7 +422,76 @@ def main() -> None:
         assert all(key not in overview.text for key in (first_otp, resent_otp, expired_otp))
         ok("committee monitoring exposes channel counts and provider readiness without secrets")
 
-        # ── 12. production fails closed without a provider ──────────────────
+        # ── 12. register approval sends one email and WhatsApp notice ────────
+        chair_login = client.post(
+            "/api/auth/login",
+            json={"email": "chairman@sjcjos-alumni.org", "password": "ChangeMe!2026"},
+        )
+        assert chair_login.status_code == 200, chair_login.text
+        chair_headers = {"authorization": f"Bearer {chair_login.json()['access_token']}"}
+        with SessionLocal() as db:
+            eligible = db.scalar(
+                select(func.count(Voter.id)).where(
+                    Voter.election_id == election_id, Voter.is_eligible.is_(True)
+                )
+            ) or 0
+        notice_start = len(CAPTURED)
+        approved = client.post(
+            f"/api/register/{election_id}/approve", headers=chair_headers
+        )
+        assert approved.status_code == 200, approved.text
+        notice = approved.json()["notifications"]
+        notice_calls = calls_since(notice_start)
+        assert notice["voters"] == eligible, notice
+        assert notice["email_sent"] == eligible, notice
+        assert notice["whatsapp_sent"] == eligible - 1, notice
+        assert notice["whatsapp_no_consent"] == 1, notice
+        assert notice["email_failed"] == 0 and notice["whatsapp_failed"] == 0, notice
+        assert len(notice_calls) == 2 * eligible - 1, [call["path"] for call in notice_calls]
+        email_notice = next(call for call in notice_calls if call["path"] == "/emails")
+        whatsapp_notice = next(
+            call for call in notice_calls if call["path"] == "/123456789/messages"
+        )
+        email_notice_payload = json.loads(email_notice["body"])
+        whatsapp_notice_payload = json.loads(whatsapp_notice["body"])
+        assert email_notice_payload["subject"].endswith("You are registered to vote")
+        assert "Voter ID" in email_notice_payload["text"]
+        assert "OTP" not in email_notice_payload["text"].split("one-time password")[0]
+        assert whatsapp_notice_payload["template"]["name"] == "sjc_registration_confirmation"
+        wa_notice_params = whatsapp_notice_payload["template"]["components"][0]["parameters"]
+        assert len(wa_notice_params) == 3, wa_notice_params
+        assert all(item["type"] == "text" and item["text"] for item in wa_notice_params)
+        with SessionLocal() as db:
+            rows = db.execute(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.election_id == election_id,
+                    NotificationDelivery.purpose == "registration",
+                )
+            ).scalars().all()
+            assert len(rows) == 2 * eligible - 1
+            assert {row.channel for row in rows} == {"email", "whatsapp"}
+            assert all(row.status == "sent" and row.challenge_id is None for row in rows)
+            assert db.scalar(
+                select(func.count(Voter.id)).where(
+                    Voter.election_id == election_id,
+                    Voter.registration_email_sent_at.is_not(None),
+                    Voter.registration_whatsapp_sent_at.is_not(None),
+                )
+            ) == eligible - 1
+        ok("approval sends an email and an approved WhatsApp utility notice once per voter")
+
+        # ── 13. repeated approval is idempotent for successful channels ──────
+        again_start = len(CAPTURED)
+        again = client.post(f"/api/register/{election_id}/approve", headers=chair_headers)
+        assert again.status_code == 200, again.text
+        again_notice = again.json()["notifications"]
+        assert len(calls_since(again_start)) == 0
+        assert again_notice["email_already_sent"] == eligible, again_notice
+        assert again_notice["whatsapp_already_sent"] == eligible - 1, again_notice
+        assert again_notice["whatsapp_no_consent"] == 1, again_notice
+        ok("repeated register approval does not resend successful notices")
+
+        # ── 14. production fails closed without a provider ──────────────────
         settings.environment = "production"
         settings.email_provider = "none"
         settings.resend_api_key = ""
@@ -466,7 +535,7 @@ def main() -> None:
 
     server.shutdown()
     print("\n" + "=" * 72)
-    print(f"SIMULTANEOUS OTP TESTS PASSED: {len(PASSED)} checks")
+    print(f"OTP + REGISTRATION NOTICE TESTS PASSED: {len(PASSED)} checks")
     print("=" * 72)
     for label in PASSED:
         print(f"  • {label}")

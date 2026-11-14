@@ -103,7 +103,15 @@ export default function RegisterPage() {
     setError("");
     try {
       const result = await api(`/api/register/${id}/approve`, { method: "POST", auth: true });
-      setNotice(`${result.approved} voter(s) approved; ${result.excluded} excluded.`);
+      const n = result.notifications;
+      const delivery = n
+        ? ` Email: ${n.email_sent ?? 0} sent, ${n.email_failed ?? 0} failed, ` +
+          `${n.email_unavailable ?? 0} unavailable. ` +
+          `WhatsApp: ${n.whatsapp_sent ?? 0} sent, ${n.whatsapp_failed ?? 0} failed, ` +
+          `${(n.whatsapp_unavailable ?? 0) + (n.whatsapp_no_consent ?? 0)} unavailable.`
+        : "";
+      if (n?.error) setError(`Register approved, but ${n.error}.`);
+      setNotice(`${result.approved} voter(s) approved; ${result.excluded} excluded.${delivery}`);
       load();
     } catch (err: any) {
       setError(err.message);
@@ -208,10 +216,14 @@ export default function RegisterPage() {
                   }}
                 />
               </label>
+              <a className="btn-ghost" href="/voter_register_template.csv" download>
+                Download CSV template
+              </a>
             </div>
             <p className="text-xs text-ink/45">
               Required columns: <span className="font-mono">voter_id, full_name</span>. Optional:{" "}
               <span className="font-mono">email, phone, whatsapp_consent, alumni_set, graduation_year</span>.
+              Use the template to keep the header row exact.
             </p>
           </form>
           ) : (
@@ -225,7 +237,9 @@ export default function RegisterPage() {
           <SectionHeading eyebrow="Approval" title="Register approval" />
           <p className="text-sm leading-relaxed text-ink/60">
             Only the Chairman can approve the register. Approved voters become eligible for
-            accreditation; changes are locked once the first ballot is cast.
+            accreditation; changes are locked once the first ballot is cast. Approval also sends
+            a registration notice by email and WhatsApp where a contact, consent and provider are
+            available.
           </p>
           {canApprove ? (
             <button className="btn-dark mt-4 w-full" onClick={approveRegister} disabled={busy}>
