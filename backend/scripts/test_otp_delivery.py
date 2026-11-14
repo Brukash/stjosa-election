@@ -200,6 +200,12 @@ def main() -> None:
         assert all(row["recipient_masked"] for row in data["deliveries"])
         email_otp, sms_otp, wa_otp = otp_from_calls(calls)
         assert len(email_otp) == 6 and email_otp == sms_otp == wa_otp, (email_otp, sms_otp, wa_otp)
+        wa_components = wa_payload["template"]["components"]
+        assert wa_components[0]["type"] == "body"
+        assert wa_components[1]["type"] == "button"
+        assert wa_components[1]["sub_type"] == "url"
+        assert wa_components[1]["index"] == "0"
+        assert wa_components[1]["parameters"][0]["text"] == wa_otp
         assert email_otp not in response.text
         assert sms_otp not in response.text
         assert wa_otp not in response.text

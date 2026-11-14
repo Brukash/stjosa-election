@@ -412,12 +412,13 @@ def _send_termii(destination: str, body: str) -> tuple[str | None, str | None]:
 
 
 def _send_whatsapp(destination: str, otp: str) -> tuple[str | None, str | None]:
-    """Send an approved authentication template through Meta Cloud API."""
+    """Send an approved authentication template through Meta Cloud API.
+
+    Meta authentication templates require the code in both the body and the
+    OTP button. The button is exposed as a URL button by Meta after approval.
+    """
     to = "".join(ch for ch in destination if ch.isdigit())
-    minutes = max(1, settings.otp_ttl_seconds // 60)
     parameters = [{"type": "text", "text": otp}]
-    if settings.whatsapp_template_parameter_count >= 2:
-        parameters.append({"type": "text", "text": str(minutes)})
     payload = {
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -426,7 +427,15 @@ def _send_whatsapp(destination: str, otp: str) -> tuple[str | None, str | None]:
         "template": {
             "name": settings.whatsapp_template_name,
             "language": {"code": settings.whatsapp_template_language},
-            "components": [{"type": "body", "parameters": parameters}],
+            "components": [
+                {"type": "body", "parameters": parameters},
+                {
+                    "type": "button",
+                    "sub_type": "url",
+                    "index": "0",
+                    "parameters": [{"type": "text", "text": otp}],
+                },
+            ],
         },
     }
     url = f"{settings.whatsapp_api_base}/{settings.whatsapp_phone_number_id}/messages"

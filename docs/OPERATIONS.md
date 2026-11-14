@@ -83,8 +83,8 @@ column. The API also applies that additive column defensively at startup for old
 1. Create a Meta Business account, a WhatsApp Business Account and a system-user access token with
    `whatsapp_business_messaging` permission. Never use a personal WhatsApp account or automation.
 2. Register the sending phone number and create an **Authentication** message template (for example
-   `sjc_election_otp`, language `en_US`) with the OTP as the first body parameter. If the approved
-   template has a second expiry parameter, set `WHATSAPP_TEMPLATE_PARAMETER_COUNT=2`.
+   `sjc_election_otp`, language `en_US`) with an OTP button. The sender includes the same code in
+   both the body and the OTP button parameter, as Meta requires.
 3. Set `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
    `WHATSAPP_TEMPLATE_NAME` and `WHATSAPP_TEMPLATE_LANGUAGE`. Keep the token in the server-side
    environment/secret store only.

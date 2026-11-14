@@ -89,9 +89,6 @@ class Settings:
     ).rstrip("/")
     whatsapp_template_name: str = os.getenv("WHATSAPP_TEMPLATE_NAME", "sjc_election_otp")
     whatsapp_template_language: str = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en_US")
-    # Authentication templates normally take the code as {{1}}. A two-parameter
-    # template may take the code as {{1}} and expiry minutes as {{2}}.
-    whatsapp_template_parameter_count: int = _int("WHATSAPP_TEMPLATE_PARAMETER_COUNT", 1)
     whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "")
     whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
 
