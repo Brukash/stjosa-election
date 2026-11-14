@@ -1,8 +1,12 @@
 """FastAPI application entry point."""
 from __future__ import annotations
 
+import base64
+import io
 import os
+import tarfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,8 +32,30 @@ from .routers import (
 from .seed import seed_database
 
 
+def _materialize_keys() -> None:
+    """Restore encrypted key files on hosts with an ephemeral filesystem."""
+    archive = os.getenv("KEYS_ARCHIVE_B64", "").strip()
+    if not archive:
+        return
+    marker = settings.keys_dir / "credential_issuer_private.pem"
+    if marker.exists():
+        return
+    settings.keys_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        raw = base64.b64decode(archive, validate=True)
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as bundle:
+            for member in bundle.getmembers():
+                parts = Path(member.name).parts
+                if member.name.startswith(("/", "\\")) or ".." in parts:
+                    raise RuntimeError("Unsafe path in key archive")
+            bundle.extractall(settings.keys_dir)
+    except Exception as exc:  # pragma: no cover - deployment infrastructure
+        raise RuntimeError("Could not restore the election key archive") from exc
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _materialize_keys()
     issues = settings.production_issues
     if issues:
         raise RuntimeError(

@@ -8,6 +8,16 @@ import { api, can, getProfile } from "@/lib/api";
 const SAMPLE = `voter_id,full_name,email,phone,alumni_set,graduation_year
 SJC/AL/2016/025,Jane Doe,jane.doe@example.com,+2348000000000,Lagos Chapter,2016`;
 
+const EMPTY_VOTER = {
+  voter_id: "",
+  full_name: "",
+  email: "",
+  phone: "",
+  alumni_set: "",
+  graduation_year: "",
+  is_eligible: true,
+};
+
 export default function RegisterPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -18,6 +28,7 @@ export default function RegisterPage() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const [voterForm, setVoterForm] = useState({ ...EMPTY_VOTER });
 
   function load() {
     api(`/api/register/${id}`, { auth: true })
@@ -43,6 +54,40 @@ export default function RegisterPage() {
           (result.errors?.length ? `${result.errors.length} row error(s).` : "")
       );
       setCsv("");
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addVoter(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const created = await api(`/api/register/${id}/voters`, {
+        method: "POST",
+        auth: true,
+        body: JSON.stringify({
+          voter_id: voterForm.voter_id.trim(),
+          full_name: voterForm.full_name.trim(),
+          email: voterForm.email.trim() || null,
+          phone: voterForm.phone.trim() || null,
+          alumni_set: voterForm.alumni_set.trim() || "General",
+          graduation_year: voterForm.graduation_year.trim()
+            ? Number(voterForm.graduation_year)
+            : null,
+          is_eligible: voterForm.is_eligible,
+        }),
+      });
+      setNotice(
+        `${created.full_name} (${created.voter_id}) was added to the register. ` +
+          "New records require register approval before accreditation."
+      );
+      setVoterForm({ ...EMPTY_VOTER });
       load();
     } catch (err: any) {
       setError(err.message);
@@ -176,6 +221,101 @@ export default function RegisterPage() {
           </div>
         </Card>
       </div>
+
+      {canImport ? (
+        <Card className="card-pad">
+          <SectionHeading eyebrow="Single registration" title="Register one voter">
+            Add an alumnus individually when they are not part of a batch file. New records are
+            marked as imported and must be approved before they can accredit.
+          </SectionHeading>
+          <form onSubmit={addVoter} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label className="label">Voter ID *</label>
+              <input
+                className="input font-mono"
+                value={voterForm.voter_id}
+                onChange={(event) => setVoterForm({ ...voterForm, voter_id: event.target.value })}
+                placeholder="SJC/AL/2016/025"
+                required
+              />
+            </div>
+            <div>
+              <label className="label">Full name *</label>
+              <input
+                className="input"
+                value={voterForm.full_name}
+                onChange={(event) => setVoterForm({ ...voterForm, full_name: event.target.value })}
+                placeholder="Jane Doe"
+                required
+              />
+            </div>
+            <div>
+              <label className="label">Alumni set</label>
+              <input
+                className="input"
+                value={voterForm.alumni_set}
+                onChange={(event) => setVoterForm({ ...voterForm, alumni_set: event.target.value })}
+                placeholder="Lagos Chapter"
+              />
+            </div>
+            <div>
+              <label className="label">Email</label>
+              <input
+                type="email"
+                className="input"
+                value={voterForm.email}
+                onChange={(event) => setVoterForm({ ...voterForm, email: event.target.value })}
+                placeholder="jane.doe@example.com"
+              />
+            </div>
+            <div>
+              <label className="label">Phone</label>
+              <input
+                className="input"
+                value={voterForm.phone}
+                onChange={(event) => setVoterForm({ ...voterForm, phone: event.target.value })}
+                placeholder="+2348000000000"
+              />
+            </div>
+            <div>
+              <label className="label">Graduation year</label>
+              <input
+                type="number"
+                min={1900}
+                max={2100}
+                className="input"
+                value={voterForm.graduation_year}
+                onChange={(event) =>
+                  setVoterForm({ ...voterForm, graduation_year: event.target.value })
+                }
+                placeholder="2016"
+              />
+            </div>
+            <label className="flex items-center gap-2 self-end pb-2 text-sm text-ink/70">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-green"
+                checked={voterForm.is_eligible}
+                onChange={(event) =>
+                  setVoterForm({ ...voterForm, is_eligible: event.target.checked })
+                }
+              />
+              Eligible to vote
+            </label>
+            <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-2">
+              <button
+                className="btn-primary"
+                disabled={busy || !voterForm.voter_id.trim() || !voterForm.full_name.trim()}
+              >
+                {busy ? "Adding…" : "Add voter"}
+              </button>
+              <span className="text-[11px] text-ink/45">
+                Email or phone is required for OTP delivery.
+              </span>
+            </div>
+          </form>
+        </Card>
+      ) : null}
 
       <Card className="card-pad">
         <SectionHeading eyebrow="Electoral register" title={`${voters.length} voter record(s)`} />

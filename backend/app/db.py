@@ -5,6 +5,7 @@ from collections.abc import Iterator
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from .config import settings
 
@@ -14,6 +15,9 @@ engine = create_engine(
     pool_pre_ping=True,
     future=True,
     connect_args=connect_args,
+    # Serverless functions must not keep pooled PostgreSQL sessions alive between
+    # invocations; Supabase's session pooler has a small client limit.
+    poolclass=None if settings.database_url.startswith("sqlite") else NullPool,
 )
 
 if settings.database_url.startswith("sqlite"):
