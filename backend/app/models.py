@@ -145,6 +145,8 @@ class Voter(Base, TimestampMixin):
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     email: Mapped[str | None] = mapped_column(String(255))
     phone: Mapped[str | None] = mapped_column(String(40))
+    # WhatsApp authentication messages require an opt-in recorded against the voter.
+    whatsapp_consent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     alumni_set: Mapped[str] = mapped_column(String(64), default="General", nullable=False)
     graduation_year: Mapped[int | None] = mapped_column(Integer)
     is_eligible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

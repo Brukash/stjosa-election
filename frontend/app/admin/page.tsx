@@ -110,6 +110,59 @@ export default function AdminDashboardPage() {
             <Stat label="Challenged ballots" value={stats.challenged_ballots} hint="excluded from count" />
           </div>
 
+          <Card className="card-pad">
+            <SectionHeading eyebrow="Accreditation delivery" title="OTP channels and provider health">
+              Requests, successful deliveries and failures are recorded without OTP values or full
+              voter contact details.
+            </SectionHeading>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Stat label="OTP requests" value={overview.live.otp_delivery.requests ?? 0} />
+              <Stat label="Delivered" value={overview.live.otp_delivery.sent ?? 0} />
+              <Stat label="Failed deliveries" value={overview.live.otp_delivery.failed ?? 0} />
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Channel</th>
+                      <th>Attempts</th>
+                      <th>Delivered</th>
+                      <th>Failed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(overview.live.otp_delivery.by_channel ?? []).map((row: any) => (
+                      <tr key={row.channel}>
+                        <td className="capitalize">{row.channel}</td>
+                        <td>{row.attempts}</td>
+                        <td>{row.delivered}</td>
+                        <td>{row.failed}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="space-y-1">
+                {(overview.live.otp_delivery.providers ?? []).map((provider: any) => (
+                  <div key={provider.channel} className="kv">
+                    <dt className="capitalize">{provider.label}</dt>
+                    <dd>
+                      <span className={provider.configured ? "pill-green" : "pill-grey"}>
+                        {provider.configured ? `${provider.provider} ready` : "not configured"}
+                      </span>
+                    </dd>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {overview.live.otp_delivery.last_failure_reason ? (
+              <p className="mt-3 text-xs text-red-700">
+                Last failure: {overview.live.otp_delivery.last_failure_reason}
+              </p>
+            ) : null}
+          </Card>
+
           <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
             <Card className="card-pad">
               <SectionHeading eyebrow="Live monitoring" title="Ballot submissions, last 24 hours">

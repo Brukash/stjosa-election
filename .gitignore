@@ -12,7 +12,9 @@ backend/.env.supabase
 
 # runtime data
 backend/election.db
+backend/preview.db
 backend/keys/
+backend/keys_preview/
 *.log
 
 # build output

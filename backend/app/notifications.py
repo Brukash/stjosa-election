@@ -1,10 +1,13 @@
-"""OTP delivery over email (Resend or SMTP) and SMS (Twilio).
+"""OTP delivery over email, SMS and WhatsApp.
 
 Security rules enforced here:
   * The OTP is sent to the contact on the approved register, never to a value
     supplied by the caller.
   * The OTP is never logged and never written to the database; only a masked
     recipient, provider message id and failure reason are recorded.
+  * WhatsApp is only offered where the voter has a recorded opt-in. It uses the
+    official Meta WhatsApp Business Platform, never a personal account or
+    browser automation.
   * Outside local development the OTP is never returned by the API. If no
     delivery channel is configured, the request fails instead of revealing it.
   * Delivery failures never expose the OTP or provider credentials.
@@ -15,7 +18,8 @@ import base64
 import html
 import smtplib
 import time
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
 
@@ -26,13 +30,27 @@ from .config import settings
 from .models import Election, NotificationDelivery, Voter
 
 RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+CHANNEL_LABELS = {"email": "Email", "sms": "SMS", "whatsapp": "WhatsApp", "development": "Development"}
+
+
+@dataclass
+class ChannelOption:
+    channel: str
+    label: str
+    available: bool
+    destination_masked: str
+    provider: str
+    reason: str | None = None
+
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
 @dataclass
 class DeliveryResult:
-    channel: str          # email | sms | development
-    provider: str         # resend | smtp | twilio | on-screen | none
-    status: str           # sent | failed | skipped
+    channel: str          # email | sms | whatsapp | development
+    provider: str         # resend | smtp | termii | twilio | meta | on-screen | none
+    status: str           # sent | failed | unavailable | skipped
     recipient_masked: str
     provider_message_id: str | None = None
     error: str | None = None
@@ -41,19 +59,22 @@ class DeliveryResult:
     def delivered(self) -> bool:
         return self.status in {"sent", "skipped"}
 
+    def as_dict(self) -> dict:
+        return asdict(self)
+
 
 def mask_email(value: str) -> str:
     local, _, domain = value.partition("@")
     if not domain:
         return "***"
-    return f"{local[:1]}***@{domain}"
+    return f"{local[:1]}******@{domain}"
 
 
 def mask_phone(value: str) -> str:
     digits = "".join(ch for ch in value if ch.isdigit())
-    if len(digits) < 5:
+    if len(digits) < 4:
         return "***"
-    return f"+{digits[:3]}***{digits[-2:]}"
+    return f"******{digits[-4:]}"
 
 
 def _normalise_phone(value: str) -> str | None:
@@ -65,26 +86,148 @@ def _normalise_phone(value: str) -> str | None:
     return raw
 
 
-def choose_channel(voter: Voter) -> tuple[str, str, str] | None:
-    """Return (channel, provider, destination) for the voter's registered contact.
+def _email_provider() -> str:
+    return settings.email_provider.strip().lower()
 
-    Email is preferred; SMS is used when no email channel is configured or the
-    voter has no email address. Development on-screen display is a last resort
-    available only on a local development deployment.
+
+def _sms_provider() -> str:
+    return settings.sms_provider.strip().lower()
+
+
+def _whatsapp_provider() -> str:
+    return settings.whatsapp_provider.strip().lower()
+
+
+def channel_options(voter: Voter) -> list[ChannelOption]:
+    """All three registered channels, with availability and masked destination.
+
+    Unavailable options are returned intentionally so the voter can see which
+    registered channels will and will not receive the shared OTP. No full
+    contact detail is ever included.
     """
-    if voter.email and settings.email_configured:
-        return ("email", settings.email_provider.strip().lower(), voter.email.strip())
-    if voter.phone and settings.sms_configured:
-        phone = _normalise_phone(voter.phone)
-        if phone:
-            return ("sms", "twilio", phone)
-    if settings.expose_dev_otp:
-        return ("development", "on-screen", mask_email(voter.email) if voter.email else mask_phone(voter.phone or ""))
-    return None
+    email_reason: str | None = None
+    if not voter.email:
+        email_reason = "No email address is registered for this Voter ID."
+    elif not settings.email_configured:
+        email_reason = "Email delivery is not configured by the Electoral Committee."
+    email_masked = mask_email(voter.email) if voter.email else "—"
+
+    phone = _normalise_phone(voter.phone or "")
+    sms_reason: str | None = None
+    if not phone:
+        sms_reason = "No valid mobile number is registered for this Voter ID."
+    elif not settings.sms_configured:
+        sms_reason = "SMS delivery is not configured by the Electoral Committee."
+
+    whatsapp_reason: str | None = None
+    if not phone:
+        whatsapp_reason = "No valid mobile number is registered for this Voter ID."
+    elif not voter.whatsapp_consent:
+        whatsapp_reason = "The voter has not consented to WhatsApp messages."
+    elif not settings.whatsapp_configured:
+        whatsapp_reason = "WhatsApp delivery is not configured by the Electoral Committee."
+
+    options = [
+        ChannelOption(
+            channel="email",
+            label=CHANNEL_LABELS["email"],
+            available=email_reason is None,
+            destination_masked=email_masked,
+            provider=_email_provider() if settings.email_configured else "none",
+            reason=email_reason,
+        ),
+        ChannelOption(
+            channel="sms",
+            label=CHANNEL_LABELS["sms"],
+            available=sms_reason is None,
+            destination_masked=mask_phone(phone) if phone else "—",
+            provider=_sms_provider() if settings.sms_configured else "none",
+            reason=sms_reason,
+        ),
+        ChannelOption(
+            channel="whatsapp",
+            label=CHANNEL_LABELS["whatsapp"],
+            available=whatsapp_reason is None,
+            destination_masked=mask_phone(phone) if phone else "—",
+            provider="meta" if settings.whatsapp_configured else "none",
+            reason=whatsapp_reason,
+        ),
+    ]
+
+    # Local-only on-screen delivery keeps development usable when no real
+    # provider is configured. It is never offered alongside a working provider,
+    # and production/loopback rules are enforced by settings.expose_dev_otp.
+    if settings.expose_dev_otp and not any(option.available for option in options):
+        options.append(
+            ChannelOption(
+                channel="development",
+                label="On-screen (development only)",
+                available=True,
+                destination_masked="This screen",
+                provider="on-screen",
+                reason=None,
+            )
+        )
+    return options
 
 
-def delivery_available(voter: Voter) -> bool:
-    return choose_channel(voter) is not None
+def provider_status() -> list[dict]:
+    """Safe provider readiness for the Super Administrator and committee.
+
+    Values are intentionally limited to configuration state. Secrets are never
+    included in an API response.
+    """
+    return [
+        {
+            "channel": "email",
+            "label": "Email",
+            "provider": _email_provider(),
+            "configured": settings.email_configured,
+            "required_settings": [
+                "EMAIL_PROVIDER=resend",
+                "RESEND_API_KEY",
+                "EMAIL_FROM",
+            ]
+            if _email_provider() == "resend"
+            else ["EMAIL_PROVIDER=smtp", "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD"],
+        },
+        {
+            "channel": "sms",
+            "label": "SMS",
+            "provider": _sms_provider(),
+            "configured": settings.sms_configured,
+            "required_settings": (
+                ["SMS_PROVIDER=termii", "TERMII_API_KEY", "TERMII_SENDER_ID"]
+                if _sms_provider() == "termii"
+                else [
+                    "SMS_PROVIDER=twilio",
+                    "TWILIO_ACCOUNT_SID",
+                    "TWILIO_AUTH_TOKEN",
+                    "TWILIO_FROM_NUMBER",
+                ]
+            ),
+        },
+        {
+            "channel": "whatsapp",
+            "label": "WhatsApp",
+            "provider": _whatsapp_provider(),
+            "configured": settings.whatsapp_configured,
+            "required_settings": [
+                "WHATSAPP_PROVIDER=meta",
+                "WHATSAPP_ACCESS_TOKEN",
+                "WHATSAPP_PHONE_NUMBER_ID",
+                "WHATSAPP_TEMPLATE_NAME",
+            ],
+            "template": settings.whatsapp_template_name,
+            "template_language": settings.whatsapp_template_language,
+            "consent_required": True,
+            "delivery_status_webhook": {
+                "url": f"{settings.api_origin}/api/webhooks/whatsapp",
+                "signature_configured": bool(settings.whatsapp_app_secret),
+                "verification_configured": bool(settings.whatsapp_verify_token),
+            },
+        },
+    ]
 
 
 # ── message rendering ───────────────────────────────────────────────────────
@@ -99,8 +242,9 @@ def _email_body(election: Election, otp: str) -> tuple[str, str, str]:
         f"accreditation page to continue.\n\n"
         f"Election reference: {election.reference}\n"
         f"Verification portal: {settings.app_origin}/verify\n\n"
-        f"If you did not request this password, do not share it. Report the request to the "
-        f"Electoral Committee at accreditation@sjcjos-alumni.org.\n"
+        f"Never share this OTP with anyone. Officials will never ask you for it. "
+        f"If you did not request this password, report the request to the Electoral Committee "
+        f"at accreditation@sjcjos-alumni.org.\n"
     )
     html_body = f"""\
 <!doctype html>
@@ -124,12 +268,15 @@ def _email_body(election: Election, otp: str) -> tuple[str, str, str]:
           <p style="margin:18px 0 0;font-size:13px;color:#55635A">
             It expires in {minutes} minutes and can be used once. Enter it on the accreditation page to continue.
           </p>
-          <p style="margin:14px 0 0;font-size:13px;color:#55635A">
-            If you did not request this password, do not share it. Report the request to the Electoral Committee.
+          <p style="margin:14px 0 0;font-size:13px;color:#B42318;font-weight:600">
+            Never share this OTP with anyone. Officials will never ask you for it.
+          </p>
+          <p style="margin:10px 0 0;font-size:13px;color:#55635A">
+            If you did not request this password, report the request to the Electoral Committee.
           </p>
         </td></tr>
         <tr><td style="background:#EEF4EC;padding:16px 26px;font-size:11px;color:#55635A">
-          This message never asks for your ballot choices. Officials will never ask for your OTP.
+          This message never asks for your ballot choices. St. John's College Jos Alumni Election.
         </td></tr>
       </table>
     </td></tr>
@@ -183,9 +330,12 @@ def _send_resend(
     if response.status_code >= 300:
         return None, f"email provider rejected the message ({response.status_code})"
     try:
-        return str(response.json().get("id") or ""), None
+        message_id = str(response.json().get("id") or "")
+        if not message_id:
+            return None, "email provider did not confirm a message id"
+        return message_id, None
     except ValueError:
-        return None, None
+        return None, "email provider returned an invalid response"
 
 
 def _send_smtp(destination: str, subject: str, body: str) -> tuple[str | None, str | None]:
@@ -221,13 +371,158 @@ def _send_twilio(destination: str, body: str) -> tuple[str | None, str | None]:
     if response.status_code >= 300:
         return None, f"sms provider rejected the message ({response.status_code})"
     try:
-        return str(response.json().get("sid") or ""), None
+        message_id = str(response.json().get("sid") or "")
+        if not message_id:
+            return None, "sms provider did not confirm a message id"
+        return message_id, None
     except ValueError:
-        return None, None
+        return None, "sms provider returned an invalid response"
+
+
+def _send_termii(destination: str, body: str) -> tuple[str | None, str | None]:
+    """Send a transactional SMS through Termii.
+
+    The DND route is used for OTPs; Termii's generic route is promotional and
+    may be blocked for DND numbers.
+    """
+    payload = {
+        "api_key": settings.termii_api_key,
+        "to": destination,
+        "from": settings.termii_sender_id,
+        "sms": body,
+        "type": "plain",
+        "channel": settings.termii_channel or "dnd",
+    }
+    url = f"{settings.termii_api_base}/api/sms/send"
+    with httpx.Client(timeout=settings.otp_delivery_timeout_seconds) as client:
+        response = _post_with_retry(client, url, json=payload)
+    if response.status_code >= 300:
+        return None, f"sms provider rejected the message ({response.status_code})"
+    try:
+        data = response.json()
+        message_id = str(data.get("message_id") or data.get("id") or "")
+        code = str(data.get("code") or "").lower()
+        if code and code not in {"ok", "success", "00", "0", "200"}:
+            return None, "sms provider did not confirm delivery"
+        if not message_id:
+            return None, "sms provider did not confirm a message id"
+        return message_id, None
+    except (ValueError, AttributeError):
+        return None, "sms provider returned an invalid response"
+
+
+def _send_whatsapp(destination: str, otp: str) -> tuple[str | None, str | None]:
+    """Send an approved authentication template through Meta Cloud API."""
+    to = "".join(ch for ch in destination if ch.isdigit())
+    minutes = max(1, settings.otp_ttl_seconds // 60)
+    parameters = [{"type": "text", "text": otp}]
+    if settings.whatsapp_template_parameter_count >= 2:
+        parameters.append({"type": "text", "text": str(minutes)})
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": settings.whatsapp_template_name,
+            "language": {"code": settings.whatsapp_template_language},
+            "components": [{"type": "body", "parameters": parameters}],
+        },
+    }
+    url = f"{settings.whatsapp_api_base}/{settings.whatsapp_phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {settings.whatsapp_access_token}",
+        "Content-Type": "application/json",
+    }
+    with httpx.Client(timeout=settings.otp_delivery_timeout_seconds) as client:
+        response = _post_with_retry(client, url, json=payload, headers=headers)
+    if response.status_code >= 300:
+        return None, f"whatsapp provider rejected the message ({response.status_code})"
+    try:
+        messages = response.json().get("messages") or []
+        message_id = str(messages[0].get("id") or "") if messages else ""
+        if not message_id:
+            return None, "whatsapp provider did not confirm a message id"
+        return message_id, None
+    except (ValueError, AttributeError, IndexError):
+        return None, "whatsapp provider returned an invalid response"
 
 
 # ── entry point ─────────────────────────────────────────────────────────────
-def deliver_otp(
+def _destination_for(voter: Voter, channel: str) -> str | None:
+    if channel == "email":
+        return voter.email.strip() if voter.email else None
+    if channel in {"sms", "whatsapp"}:
+        return _normalise_phone(voter.phone or "")
+    return "development" if channel == "development" else None
+
+
+def _attempt_delivery(
+    option: ChannelOption,
+    *,
+    destination: str,
+    otp: str,
+    subject: str,
+    email_text: str,
+    email_html: str,
+    sms_text: str,
+) -> DeliveryResult:
+    """Provider call only; this function has no database session and is thread-safe."""
+    if option.channel == "email":
+        try:
+            if option.provider == "smtp":
+                message_id, error = _send_smtp(destination, subject, email_text)
+            else:
+                message_id, error = _send_resend(destination, subject, email_text, email_html)
+        except Exception as exc:
+            message_id, error = None, f"email delivery unavailable ({type(exc).__name__})"
+        return DeliveryResult(
+            channel="email",
+            provider=option.provider,
+            status="failed" if error else "sent",
+            recipient_masked=option.destination_masked,
+            provider_message_id=message_id,
+            error=error,
+        )
+    if option.channel == "sms":
+        try:
+            if option.provider == "termii":
+                message_id, error = _send_termii(destination, sms_text)
+            else:
+                message_id, error = _send_twilio(destination, sms_text)
+        except Exception as exc:
+            message_id, error = None, f"sms delivery unavailable ({type(exc).__name__})"
+        return DeliveryResult(
+            channel="sms",
+            provider=option.provider,
+            status="failed" if error else "sent",
+            recipient_masked=option.destination_masked,
+            provider_message_id=message_id,
+            error=error,
+        )
+    if option.channel == "whatsapp":
+        try:
+            message_id, error = _send_whatsapp(destination, otp)
+        except Exception as exc:
+            message_id, error = None, f"whatsapp delivery unavailable ({type(exc).__name__})"
+        return DeliveryResult(
+            channel="whatsapp",
+            provider="meta",
+            status="failed" if error else "sent",
+            recipient_masked=option.destination_masked,
+            provider_message_id=message_id,
+            error=error,
+        )
+    # Local development only: the OTP is displayed to the voter on screen.
+    return DeliveryResult(
+        channel="development",
+        provider="on-screen",
+        status="skipped",
+        recipient_masked="This screen",
+    )
+
+
+def deliver_otp_all(
     db: Session,
     *,
     election: Election,
@@ -235,72 +530,94 @@ def deliver_otp(
     otp: str,
     challenge_id: str,
     request_ip: str | None = None,
-) -> DeliveryResult:
-    """Send the OTP to the voter's registered contact and record the attempt."""
-    choice = choose_channel(voter)
-    if not choice:
-        result = DeliveryResult(
-            channel="none",
-            provider="none",
-            status="failed",
-            recipient_masked="—",
-            error="no OTP delivery channel configured",
-        )
-    else:
-        channel, provider, destination = choice
-        subject, text_body, html_body = _email_body(election, otp)
-        if channel == "email":
-            masked = mask_email(destination)
-            try:
-                if provider == "smtp":
-                    message_id, error = _send_smtp(destination, subject, text_body)
-                else:
-                    message_id, error = _send_resend(destination, subject, text_body, html_body)
-            except Exception as exc:  # transport failure, malformed response, timeout
-                message_id, error = None, f"email delivery unavailable ({type(exc).__name__})"
-            result = DeliveryResult(
-                channel="email",
-                provider=provider,
-                status="failed" if error else "sent",
-                recipient_masked=masked,
-                provider_message_id=message_id,
-                error=error,
+) -> list[DeliveryResult]:
+    """Attempt the same OTP on every available registered channel concurrently.
+
+    One provider failure is isolated: the remaining provider calls are still
+    completed and their confirmed results are returned. The caller decides
+    whether at least one confirmed delivery permits the challenge to remain
+    usable.
+    """
+    options = channel_options(voter)
+    subject, email_text, email_html = _email_body(election, otp)
+    sms_text = _sms_body(election, otp)
+    results: list[DeliveryResult | None] = [None] * len(options)
+    attempts: list[tuple[int, ChannelOption, str]] = []
+
+    for index, option in enumerate(options):
+        if not option.available:
+            results[index] = DeliveryResult(
+                channel=option.channel,
+                provider=option.provider,
+                status="unavailable",
+                recipient_masked=option.destination_masked,
+                error=option.reason,
             )
-        elif channel == "sms":
-            masked = mask_phone(destination)
-            try:
-                message_id, error = _send_twilio(destination, _sms_body(election, otp))
-            except Exception as exc:
-                message_id, error = None, f"sms delivery unavailable ({type(exc).__name__})"
-            result = DeliveryResult(
-                channel="sms",
-                provider="twilio",
-                status="failed" if error else "sent",
-                recipient_masked=masked,
-                provider_message_id=message_id,
-                error=error,
-            )
-        else:
-            # Local development only: the OTP is displayed to the voter on screen.
-            result = DeliveryResult(
+            continue
+        if option.channel == "development":
+            results[index] = DeliveryResult(
                 channel="development",
                 provider="on-screen",
                 status="skipped",
-                recipient_masked=destination or "development",
+                recipient_masked="This screen",
             )
+            continue
+        destination = _destination_for(voter, option.channel)
+        if not destination:
+            results[index] = DeliveryResult(
+                channel=option.channel,
+                provider=option.provider,
+                status="unavailable",
+                recipient_masked=option.destination_masked,
+                error="No registered destination is available for this channel.",
+            )
+            continue
+        attempts.append((index, option, destination))
 
-    db.add(
-        NotificationDelivery(
-            election_id=election.id,
-            voter_row_id=voter.id,
-            challenge_id=challenge_id,
-            channel=result.channel,
-            provider=result.provider,
-            status=result.status,
-            recipient_masked=result.recipient_masked,
-            provider_message_id=result.provider_message_id,
-            error=(result.error or "")[:300] or None,
-            request_ip=request_ip,
+    if attempts:
+        with ThreadPoolExecutor(max_workers=len(attempts)) as executor:
+            futures = {
+                executor.submit(
+                    _attempt_delivery,
+                    option,
+                    destination=destination,
+                    otp=otp,
+                    subject=subject,
+                    email_text=email_text,
+                    email_html=email_html,
+                    sms_text=sms_text,
+                ): index
+                for index, option, destination in attempts
+            }
+            for future, index in futures.items():
+                try:
+                    results[index] = future.result()
+                except Exception as exc:  # defensive: a worker must not cancel peers
+                    option = options[index]
+                    results[index] = DeliveryResult(
+                        channel=option.channel,
+                        provider=option.provider,
+                        status="failed",
+                        recipient_masked=option.destination_masked,
+                        error=f"delivery worker failed ({type(exc).__name__})",
+                    )
+
+    final_results = [result for result in results if result is not None]
+    for result in final_results:
+        if result.status == "unavailable":
+            continue
+        db.add(
+            NotificationDelivery(
+                election_id=election.id,
+                voter_row_id=voter.id,
+                challenge_id=challenge_id,
+                channel=result.channel,
+                provider=result.provider,
+                status=result.status,
+                recipient_masked=result.recipient_masked,
+                provider_message_id=result.provider_message_id,
+                error=(result.error or "")[:300] or None,
+                request_ip=request_ip,
+            )
         )
-    )
-    return result
+    return final_results

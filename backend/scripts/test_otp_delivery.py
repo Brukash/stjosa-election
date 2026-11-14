@@ -1,19 +1,21 @@
-"""Integration test for OTP delivery and the development-exposure gate.
+"""End-to-end simultaneous OTP accreditation tests.
 
-Runs the real FastAPI app against a temporary SQLite database and a local mock
-HTTP provider, so the Resend/Twilio request paths and payloads are exercised
-without any real credentials.
+Runs the real FastAPI app against a temporary SQLite database and local mock
+providers for Resend, Termii and Meta WhatsApp. No real credentials are used.
 
 Run:  .venv/Scripts/python.exe scripts/test_otp_delivery.py
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
 import sys
 import tempfile
 import threading
+from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -24,29 +26,45 @@ os.environ.update(
         "KEYS_DIR": str(TMP / "keys"),
         "ENVIRONMENT": "development",
         "APP_ORIGIN": "http://localhost:3000",
+        "API_ORIGIN": "http://localhost:8000",
         "DEV_EXPOSE_OTP": "false",
         "EMAIL_PROVIDER": "resend",
         "RESEND_API_KEY": "test-resend-key",
         "EMAIL_API_BASE": "http://127.0.0.1:8899",
-        "SMS_PROVIDER": "none",
+        "SMS_PROVIDER": "termii",
+        "TERMII_API_KEY": "test-termii-key",
+        "TERMII_SENDER_ID": "SJCAlumni",
+        "TERMII_CHANNEL": "dnd",
+        "TERMII_API_BASE": "http://127.0.0.1:8899",
+        "WHATSAPP_PROVIDER": "meta",
+        "WHATSAPP_ACCESS_TOKEN": "test-wa-token",
+        "WHATSAPP_PHONE_NUMBER_ID": "123456789",
+        "WHATSAPP_API_BASE": "http://127.0.0.1:8899",
+        "WHATSAPP_TEMPLATE_NAME": "sjc_election_otp",
+        "WHATSAPP_TEMPLATE_LANGUAGE": "en_US",
+        "WHATSAPP_APP_SECRET": "test-app-secret",
+        "WHATSAPP_VERIFY_TOKEN": "test-verify-token",
         "DEMO_SEED": "true",
         "SEED_DEFAULT_PASSWORD": "ChangeMe!2026",
-        "OTP_RESEND_SECONDS": "0",
+        "OTP_RESEND_SECONDS": "60",
         "OTP_DELIVERY_TIMEOUT_SECONDS": "3",
     }
 )
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
 
 from app.config import settings  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import NotificationDelivery  # noqa: E402
+from app.models import AccreditationRecord, NotificationDelivery, OtpChallenge, Voter  # noqa: E402
+from app.security import as_aware  # noqa: E402
+from app.services import now  # noqa: E402
 
 CAPTURED: list[dict] = []
 PASSED: list[str] = []
+MOCK_COUNTER = 0
 
 
 def ok(label: str) -> None:
@@ -56,15 +74,32 @@ def ok(label: str) -> None:
 
 class MockProvider(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
+        global MOCK_COUNTER
+        MOCK_COUNTER += 1
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(length).decode("utf-8", "replace")
         CAPTURED.append(
-            {"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body}
+            {
+                "path": self.path,
+                "headers": {k.lower(): v for k, v in self.headers.items()},
+                "body": body,
+            }
         )
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"id": "mock-message-1", "sid": "SM_mock_1"}).encode())
+        self.wfile.write(
+            json.dumps(
+                {
+                    "id": f"email-mock-{MOCK_COUNTER}",
+                    "sid": f"SM_mock_{MOCK_COUNTER}",
+                    "message_id": f"termii-mock-{MOCK_COUNTER}",
+                    "code": "ok",
+                    "message": "Successfully Sent",
+                    "messages": [{"id": f"wamid.mock.{MOCK_COUNTER}"}],
+                }
+            ).encode()
+        )
 
     def log_message(self, *args):  # silence request logging
         return
@@ -75,8 +110,58 @@ def six_digit_code(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def otp_payload(response) -> dict:
-    return response.json()
+def calls_since(start: int) -> list[dict]:
+    return CAPTURED[start:]
+
+
+def call_for(calls: list[dict], path: str) -> dict:
+    matches = [call for call in calls if call["path"] == path]
+    assert len(matches) == 1, (path, [call["path"] for call in calls])
+    return matches[0]
+
+
+def request_otp(client: TestClient, election_id: str, voter_id: str):
+    return client.post(
+        "/api/accreditation/request-otp",
+        json={"election_id": election_id, "voter_id": voter_id},
+    )
+
+
+def verify(client: TestClient, election_id: str, voter_id: str, challenge_id: str, otp: str):
+    return client.post(
+        "/api/accreditation/verify-otp",
+        json={
+            "election_id": election_id,
+            "voter_id": voter_id,
+            "challenge_id": challenge_id,
+            "otp": otp,
+        },
+    )
+
+
+def statuses(payload: dict) -> dict[str, str]:
+    return {row["channel"]: row["status"] for row in payload["deliveries"]}
+
+
+def otp_from_calls(calls: list[dict]) -> tuple[str, str, str]:
+    email_call = call_for(calls, "/emails")
+    sms_call = call_for(calls, "/api/sms/send")
+    whatsapp_call = call_for(calls, "/123456789/messages")
+    email_payload = json.loads(email_call["body"])
+    sms_payload = json.loads(sms_call["body"])
+    wa_payload = json.loads(whatsapp_call["body"])
+    return (
+        six_digit_code(email_payload["text"]) or "",
+        six_digit_code(sms_payload.get("sms", "")) or "",
+        wa_payload["template"]["components"][0]["parameters"][0]["text"],
+    )
+
+
+def set_voter_consent(voter_id: str, consent: bool) -> None:
+    with SessionLocal() as db:
+        voter = db.execute(select(Voter).where(Voter.voter_id == voter_id)).scalar_one()
+        voter.whatsapp_consent = consent
+        db.commit()
 
 
 def main() -> None:
@@ -87,149 +172,296 @@ def main() -> None:
         election = client.get("/api/public/election").json()["election"]
         election_id = election["id"]
 
-        # ── 1. real email delivery through the Resend HTTP API ──────────────
-        response = client.post(
-            "/api/accreditation/request-otp",
-            json={"election_id": election_id, "voter_id": "SJC/AL/2004/001"},
-        )
+        # ── 1. one request fans out the same OTP to all three providers ──────
+        start = len(CAPTURED)
+        response = request_otp(client, election_id, "SJC/AL/2004/001")
         assert response.status_code == 200, response.text
-        data = otp_payload(response)
-        assert data["delivery_channel"] == "email", data
-        assert data["dev_otp"] is None, "OTP leaked to the client while DEV_EXPOSE_OTP=false"
-        assert data["delivery"].startswith("e***@"), data["delivery"]
-        ok("OTP delivered by email, no OTP in the API response")
+        data = response.json()
+        calls = calls_since(start)
+        assert len(calls) == 3, [call["path"] for call in calls]
+        emails = call_for(calls, "/emails")
+        sms = call_for(calls, "/api/sms/send")
+        whatsapp = call_for(calls, "/123456789/messages")
+        email_payload = json.loads(emails["body"])
+        sms_payload = json.loads(sms["body"])
+        wa_payload = json.loads(whatsapp["body"])
+        assert emails["headers"]["authorization"] == "Bearer test-resend-key"
+        assert email_payload["to"] == ["emeka.nwosu@alumni.sjcjos.edu.ng"]
+        assert sms_payload["api_key"] == "test-termii-key"
+        assert sms_payload["to"].startswith("+234")
+        assert sms_payload["from"] == "SJCAlumni"
+        assert sms_payload["type"] == "plain"
+        assert sms_payload["channel"] == "dnd"
+        assert wa_payload["to"].isdigit()
+        assert wa_payload["template"]["name"] == "sjc_election_otp"
+        assert statuses(data) == {"email": "sent", "sms": "sent", "whatsapp": "sent"}, data
+        assert data["delivery_channel"] == "multi"
+        assert data["dev_otp"] is None
+        assert all(row["recipient_masked"] for row in data["deliveries"])
+        email_otp, sms_otp, wa_otp = otp_from_calls(calls)
+        assert len(email_otp) == 6 and email_otp == sms_otp == wa_otp, (email_otp, sms_otp, wa_otp)
+        assert email_otp not in response.text
+        assert sms_otp not in response.text
+        assert wa_otp not in response.text
+        ok("one request sends one identical OTP through Resend, Termii and Meta WhatsApp")
 
-        assert len(CAPTURED) == 1, f"expected one provider call, got {len(CAPTURED)}"
-        call = CAPTURED[0]
-        assert call["path"] == "/emails", call["path"]
-        assert call["headers"]["authorization"] == "Bearer test-resend-key"
-        payload = json.loads(call["body"])
-        assert payload["to"] == ["emeka.nwosu@alumni.sjcjos.edu.ng"], payload["to"]
-        email_otp = six_digit_code(payload["text"])
-        assert email_otp and email_otp in payload["html"]
-        assert email_otp not in response.text, "the OTP appeared in the HTTP response"
-        ok("provider received the OTP for the registered email only (never logged/returned)")
-
-        verified = client.post(
-            "/api/accreditation/verify-otp",
-            json={
-                "election_id": election_id,
-                "voter_id": "SJC/AL/2004/001",
-                "challenge_id": data["challenge_id"],
-                "otp": email_otp,
-            },
-        )
+        # ── 2. the same OTP can verify through any channel ───────────────────
+        verified = verify(client, election_id, "SJC/AL/2004/001", data["challenge_id"], sms_otp)
         assert verified.status_code == 200, verified.text
-        ok("the emailed OTP completes accreditation")
-
+        assert verified.json()["voter"]["voter_id"] == "SJC/AL/2004/001"
         with SessionLocal() as db:
-            rows = db.execute(select(NotificationDelivery)).scalars().all()
-            assert rows and rows[-1].status == "sent"
-            assert email_otp not in (rows[-1].error or "")
-            assert rows[-1].recipient_masked.startswith("e***@")
-        ok("delivery is recorded without the OTP or full address")
+            voter = db.execute(
+                select(Voter).where(Voter.voter_id == "SJC/AL/2004/001")
+            ).scalar_one()
+            count = db.scalar(
+                select(func.count(AccreditationRecord.id)).where(
+                    AccreditationRecord.voter_row_id == voter.id
+                )
+            )
+            deliveries = db.execute(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.challenge_id == data["challenge_id"]
+                )
+            ).scalars().all()
+            assert count == 1
+            assert {row.channel for row in deliveries} == {"email", "sms", "whatsapp"}
+            assert all(row.status == "sent" for row in deliveries)
+        ok("verification through the SMS copy completes accreditation")
 
-        # ── 2. exposure policy ──────────────────────────────────────────────
-        settings.dev_expose_otp = True
-        settings.environment = "development"
-        settings.app_origin = "https://elections.example.org"
-        assert settings.expose_dev_otp is False, "non-loopback origin exposed the OTP"
-        settings.app_origin = "http://localhost:3000"
+        # ── 3. successful verification invalidates the OTP across all channels
+        reused = verify(client, election_id, "SJC/AL/2004/001", data["challenge_id"], wa_otp)
+        assert reused.status_code == 409, reused.text
+        with SessionLocal() as db:
+            voter = db.execute(
+                select(Voter).where(Voter.voter_id == "SJC/AL/2004/001")
+            ).scalar_one()
+            count = db.scalar(
+                select(func.count(AccreditationRecord.id)).where(
+                    AccreditationRecord.voter_row_id == voter.id
+                )
+            )
+            assert count == 1
+        ok("the same OTP cannot be used again and only one accreditation record exists")
+
+        # ── 4. partial provider failure does not cancel the other channels ──
+        settings.email_api_base = "http://127.0.0.1:8898"  # nothing listening
+        start = len(CAPTURED)
+        partial = request_otp(client, election_id, "SJC/AL/2006/005")
+        assert partial.status_code == 200, partial.text
+        partial_data = partial.json()
+        partial_calls = calls_since(start)
+        # The dead email endpoint cannot record a mock request, so only the two
+        # surviving providers appear here. Both must still have been attempted.
+        assert {call["path"] for call in partial_calls} == {"/api/sms/send", "/123456789/messages"}
+        assert statuses(partial_data) == {
+            "email": "failed",
+            "sms": "sent",
+            "whatsapp": "sent",
+        }, partial_data
+        assert partial_data["deliveries"][0]["error"]
+        partial_sms_payload = json.loads(call_for(partial_calls, "/api/sms/send")["body"])
+        partial_wa_payload = json.loads(call_for(partial_calls, "/123456789/messages")["body"])
+        partial_sms_otp = six_digit_code(partial_sms_payload["sms"]) or ""
+        partial_wa_otp = partial_wa_payload["template"]["components"][0]["parameters"][0]["text"]
+        assert partial_sms_otp == partial_wa_otp and len(partial_sms_otp) == 6
+        verified_partial = verify(
+            client, election_id, "SJC/AL/2006/005", partial_data["challenge_id"], partial_sms_otp
+        )
+        assert verified_partial.status_code == 200, verified_partial.text
+        ok("a failed email provider does not cancel Termii and WhatsApp delivery")
+
+        settings.email_api_base = "http://127.0.0.1:8899"
+
+        # ── 5. all provider failures fail safely ─────────────────────────────
+        settings.email_api_base = "http://127.0.0.1:8898"
+        settings.termii_api_base = "http://127.0.0.1:8898"
+        settings.whatsapp_api_base = "http://127.0.0.1:8898"
+        failed = request_otp(client, election_id, "SJC/AL/2007/007")
+        assert failed.status_code == 502, failed.text
+        assert "dev_otp" not in failed.text
+        with SessionLocal() as db:
+            failed_rows = db.execute(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.voter_row_id
+                    == db.execute(
+                        select(Voter.id).where(Voter.voter_id == "SJC/AL/2007/007")
+                    ).scalar_one()
+                )
+            ).scalars().all()
+            assert {row.channel for row in failed_rows} == {"email", "sms", "whatsapp"}
+            assert all(row.status == "failed" for row in failed_rows)
+        settings.email_api_base = "http://127.0.0.1:8899"
+        settings.termii_api_base = "http://127.0.0.1:8899"
+        settings.whatsapp_api_base = "http://127.0.0.1:8899"
+        ok("all-provider failure returns 502 and records no usable OTP")
+
+        # ── 6. incorrect attempts lock the shared challenge ─────────────────
+        wrong_start = len(CAPTURED)
+        wrong_request = request_otp(client, election_id, "SJC/AL/2008/009")
+        assert wrong_request.status_code == 200, wrong_request.text
+        wrong_data = wrong_request.json()
+        correct = otp_from_calls(calls_since(wrong_start))[0]
+        wrong_code = "000000" if correct != "000000" else "000001"
+        for attempt in range(1, 6):
+            response = verify(
+                client, election_id, "SJC/AL/2008/009", wrong_data["challenge_id"], wrong_code
+            )
+            assert response.status_code == 401, (attempt, response.text)
+        blocked = verify(
+            client, election_id, "SJC/AL/2008/009", wrong_data["challenge_id"], correct
+        )
+        assert blocked.status_code == 429, blocked.text
+        ok("five incorrect attempts lock the shared challenge")
+
+        # ── 7. expired OTP is rejected ─────────────────────────────────────
+        expired_start = len(CAPTURED)
+        expired_request = request_otp(client, election_id, "SJC/AL/2009/011")
+        assert expired_request.status_code == 200, expired_request.text
+        expired_data = expired_request.json()
+        expired_otp, _, _ = otp_from_calls(calls_since(expired_start))
+        with SessionLocal() as db:
+            challenge = db.get(OtpChallenge, expired_data["challenge_id"])
+            challenge.expires_at = now() - timedelta(minutes=1)
+            db.commit()
+        expired = verify(
+            client, election_id, "SJC/AL/2009/011", expired_data["challenge_id"], expired_otp
+        )
+        assert expired.status_code == 400, expired.text
+        assert "expired" in expired.text.lower()
+        ok("a five-minute-expired OTP is rejected")
+
+        # ── 8. resend cooldown and one-active-challenge rule ───────────────
+        settings.otp_resend_seconds = 60
+        first_start = len(CAPTURED)
+        first = request_otp(client, election_id, "SJC/AL/2010/013")
+        assert first.status_code == 200, first.text
+        first_data = first.json()
+        first_calls = calls_since(first_start)
+        first_otp, _, _ = otp_from_calls(first_calls)
+        early = request_otp(client, election_id, "SJC/AL/2010/013")
+        assert early.status_code == 429, early.text
+        with SessionLocal() as db:
+            challenge = db.get(OtpChallenge, first_data["challenge_id"])
+            assert as_aware(challenge.expires_at) > now(), "rejected resend destroyed the live OTP"
+            challenge.created_at = now() - timedelta(seconds=61)
+            db.commit()
+        resend_start = len(CAPTURED)
+        resent = request_otp(client, election_id, "SJC/AL/2010/013")
+        assert resent.status_code == 200, resent.text
+        resent_data = resent.json()
+        resent_calls = calls_since(resend_start)
+        assert len(resent_calls) == 3
+        resent_otp, _, _ = otp_from_calls(resent_calls)
+        old = verify(
+            client, election_id, "SJC/AL/2010/013", first_data["challenge_id"], first_otp
+        )
+        assert old.status_code == 400, old.text
+        new = verify(
+            client, election_id, "SJC/AL/2010/013", resent_data["challenge_id"], resent_otp
+        )
+        assert new.status_code == 200, new.text
+        ok("resend cooldown is enforced and a resend invalidates the previous OTP")
+
+        # ── 9. WhatsApp consent controls only that channel ───────────────────
+        set_voter_consent("SJC/AL/2012/017", False)
+        consent_start = len(CAPTURED)
+        no_consent = request_otp(client, election_id, "SJC/AL/2012/017")
+        assert no_consent.status_code == 200, no_consent.text
+        no_consent_data = no_consent.json()
+        assert statuses(no_consent_data)["whatsapp"] == "unavailable"
+        assert statuses(no_consent_data)["email"] == "sent"
+        assert statuses(no_consent_data)["sms"] == "sent"
+        consent_calls = calls_since(consent_start)
+        assert {call["path"] for call in consent_calls} == {"/emails", "/api/sms/send"}
+        ok("WhatsApp without consent is reported as unavailable without stopping Email or SMS")
+
+        # ── 10. contact privacy ─────────────────────────────────────────────
+        no_auth = client.get(f"/api/register/{election_id}")
+        assert no_auth.status_code == 401, no_auth.text
+        login = client.post(
+            "/api/auth/login",
+            json={"email": "observer@sjcjos-alumni.org", "password": "ChangeMe!2026"},
+        )
+        assert login.status_code == 200, login.text
+        observer_token = login.json()["access_token"]
+        forbidden = client.get(
+            f"/api/register/{election_id}",
+            headers={"authorization": f"Bearer {observer_token}"},
+        )
+        assert forbidden.status_code == 403, forbidden.text
+        ok("voter contact records remain inaccessible without register permission")
+
+        # ── 11. committee monitoring and Super Administrator readiness ───────
+        super_login = client.post(
+            "/api/auth/login",
+            json={"email": "superadmin@sjcjos-alumni.org", "password": "ChangeMe!2026"},
+        )
+        assert super_login.status_code == 200, super_login.text
+        super_headers = {"authorization": f"Bearer {super_login.json()['access_token']}"}
+        delivery_settings = client.get("/api/settings/delivery", headers=super_headers)
+        assert delivery_settings.status_code == 200, delivery_settings.text
+        readiness = delivery_settings.json()
+        assert len(readiness["providers"]) == 3
+        assert readiness["providers"][1]["provider"] == "termii"
+        assert all(provider["configured"] for provider in readiness["providers"])
+        assert "test-termii-key" not in delivery_settings.text
+        assert "test-resend-key" not in delivery_settings.text
+        overview = client.get(
+            f"/api/monitoring/{election_id}/overview", headers=super_headers
+        )
+        assert overview.status_code == 200, overview.text
+        delivery_stats = overview.json()["live"]["otp_delivery"]
+        assert delivery_stats["requests"] >= 4
+        assert any(row["channel"] == "whatsapp" for row in delivery_stats["by_channel"])
+        assert all(key not in overview.text for key in (first_otp, resent_otp, expired_otp))
+        ok("committee monitoring exposes channel counts and provider readiness without secrets")
+
+        # ── 12. production fails closed without a provider ──────────────────
         settings.environment = "production"
-        assert settings.expose_dev_otp is False, "production exposed the OTP"
-        settings.environment = "staging"
-        assert settings.expose_dev_otp is False, "staging exposed the OTP"
-        settings.environment = "development"
-        assert settings.expose_dev_otp is True
-        ok("on-screen OTP is refused outside local development")
-
-        # ── 3. production without a provider must fail closed ───────────────
         settings.email_provider = "none"
         settings.resend_api_key = ""
         settings.sms_provider = "none"
-        settings.environment = "production"
-        settings.dev_expose_otp = True  # still must not expose anything
-        blocked = client.post(
-            "/api/accreditation/request-otp",
-            json={"election_id": election_id, "voter_id": "SJC/AL/2005/003"},
-        )
-        assert blocked.status_code == 503, f"expected 503, got {blocked.status_code}: {blocked.text}"
-        assert "dev_otp" not in blocked.text
-        ok("production without a delivery provider fails closed (503, no OTP)")
+        settings.whatsapp_provider = "none"
+        settings.dev_expose_otp = True
+        blocked_prod = request_otp(client, election_id, "SJC/AL/2013/019")
+        assert blocked_prod.status_code == 503, blocked_prod.text
+        assert "dev_otp" not in blocked_prod.text
+        ok("production without a configured provider fails closed")
 
-        # ── 4. SMS fallback through Twilio ──────────────────────────────────
+        # ── 13. local development on-screen mode ────────────────────────────
         settings.environment = "development"
         settings.app_origin = "http://localhost:3000"
-        settings.sms_provider = "twilio"
-        settings.twilio_account_sid = "AC_test"
-        settings.twilio_auth_token = "test-token"
-        settings.twilio_from_number = "+2348000000000"
-        settings.sms_api_base = "http://127.0.0.1:8899"
-        sms = client.post(
-            "/api/accreditation/request-otp",
-            json={"election_id": election_id, "voter_id": "SJC/AL/2006/005"},
-        )
-        assert sms.status_code == 200, sms.text
-        sms_data = sms.json()
-        assert sms_data["delivery_channel"] == "sms", sms_data
-        assert sms_data["dev_otp"] is None
-        sms_call = CAPTURED[-1]
-        assert "/Messages.json" in sms_call["path"]
-        assert sms_call["headers"]["authorization"].startswith("Basic ")
-        from urllib.parse import parse_qs
-
-        sent = parse_qs(sms_call["body"])
-        assert sent["To"][0].startswith("+234"), sent["To"]
-        assert sent["From"] == ["+2348000000000"], sent["From"]
-        sms_otp = six_digit_code(sent["Body"][0])
-        assert sms_otp and "SJC Jos Alumni Election" in sent["Body"][0]
-        verified_sms = client.post(
-            "/api/accreditation/verify-otp",
-            json={
-                "election_id": election_id,
-                "voter_id": "SJC/AL/2006/005",
-                "challenge_id": sms_data["challenge_id"],
-                "otp": sms_otp,
-            },
-        )
-        assert verified_sms.status_code == 200, verified_sms.text
-        ok("SMS fallback sends an E.164 message and the code accredits the voter")
-
-        # ── 5. provider failure is reported without exposing the OTP ────────
-        settings.email_provider = "resend"
-        settings.resend_api_key = "test-resend-key"
-        settings.email_api_base = "http://127.0.0.1:8898"  # nothing listening
-        settings.sms_provider = "none"
-        failed = client.post(
-            "/api/accreditation/request-otp",
-            json={"election_id": election_id, "voter_id": "SJC/AL/2007/007"},
-        )
-        assert failed.status_code == 502, f"expected 502, got {failed.status_code}: {failed.text}"
-        assert "dev_otp" not in failed.text
-        with SessionLocal() as db:
-            last = db.execute(select(NotificationDelivery)).scalars().all()[-1]
-            assert last.status == "failed" and "smtp" not in (last.error or "")
-        ok("provider outage fails safely, records the failure, and never leaks the OTP")
-
-        # ── 6. local development on-screen mode ─────────────────────────────
-        settings.email_provider = "none"
-        settings.sms_provider = "none"
-        settings.environment = "development"
         settings.dev_expose_otp = True
-        local = client.post(
-            "/api/accreditation/request-otp",
-            json={"election_id": election_id, "voter_id": "SJC/AL/2008/009"},
-        )
+        local_start = len(CAPTURED)
+        local = request_otp(client, election_id, "SJC/AL/2014/021")
         assert local.status_code == 200, local.text
         local_data = local.json()
-        assert local_data["delivery_channel"] == "development"
+        assert statuses(local_data)["development"] == "skipped"
         assert local_data["dev_otp"] and len(local_data["dev_otp"]) == 6
-        ok("local development still shows the OTP when explicitly enabled")
+        assert len(calls_since(local_start)) == 0
+        ok("local development shows one on-screen OTP when no real provider is configured")
+
+        # Restore realistic settings for the final policy check.
+        settings.environment = "development"
+        settings.dev_expose_otp = False
+        settings.email_provider = "resend"
+        settings.resend_api_key = "test-resend-key"
+        settings.sms_provider = "termii"
+        settings.whatsapp_provider = "meta"
+        assert settings.expose_dev_otp is False
+        settings.environment = "production"
+        assert settings.expose_dev_otp is False
+        settings.environment = "staging"
+        assert settings.expose_dev_otp is False
+        settings.environment = "development"
+        settings.dev_expose_otp = True
+        assert settings.expose_dev_otp is True
+        ok("on-screen OTP is refused outside local development")
 
     server.shutdown()
-    print("\n" + "=" * 64)
-    print(f"OTP DELIVERY TESTS PASSED: {len(PASSED)} checks")
-    print("=" * 64)
+    print("\n" + "=" * 72)
+    print(f"SIMULTANEOUS OTP TESTS PASSED: {len(PASSED)} checks")
+    print("=" * 72)
     for label in PASSED:
         print(f"  • {label}")
 

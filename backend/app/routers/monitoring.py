@@ -24,11 +24,13 @@ from ..models import (
     ElectionConfigurationApproval,
     ElectionVerificationSetting,
     NotificationDelivery,
+    OtpChallenge,
     Profile,
     ResultDeclaration,
     TallyRun,
     Voter,
 )
+from ..notifications import provider_status
 from ..reports import audit_pdf, audit_report, audit_xlsx, result_certificate_pdf
 from ..schemas import STATUS_LABELS
 from ..security import has_permission
@@ -41,7 +43,8 @@ router = APIRouter(prefix="/monitoring", tags=["monitoring"])
 LIMITED_AUDIT_ACTIONS = (
     "otp.request", "otp.deliver", "otp.verify",
     "credential.issued", "credential.revoked",
-    "register.import", "register.voter_added", "register.eligibility", "register.approve",
+    "register.import", "register.voter_added", "register.eligibility", "register.consent",
+    "register.approve",
 )
 
 HIDDEN_RESULT_STATUSES = {"draft", "configured", "approved", "accreditation_open", "voting_open"}
@@ -150,7 +153,7 @@ def overview(
     otp_sent = db.scalar(
         select(func.count(NotificationDelivery.id)).where(
             NotificationDelivery.election_id == election.id,
-            NotificationDelivery.status == "sent",
+            NotificationDelivery.status.in_(["sent", "delivered", "read"]),
         )
     ) or 0
     otp_failed_delivery = db.scalar(
@@ -159,6 +162,31 @@ def overview(
             NotificationDelivery.status == "failed",
         )
     ) or 0
+    otp_requests = db.scalar(
+        select(func.count(OtpChallenge.id)).where(OtpChallenge.election_id == election.id)
+    ) or 0
+    channel_rows = db.execute(
+        select(
+            NotificationDelivery.channel,
+            NotificationDelivery.status,
+            func.count(NotificationDelivery.id),
+        )
+        .where(NotificationDelivery.election_id == election.id)
+        .group_by(NotificationDelivery.channel, NotificationDelivery.status)
+    ).all()
+    by_channel: dict[str, dict[str, int]] = {
+        channel: {"attempts": 0, "delivered": 0, "failed": 0}
+        for channel in ("email", "sms", "whatsapp", "development")
+    }
+    for channel, delivery_status, count in channel_rows:
+        bucket = by_channel.setdefault(
+            channel, {"attempts": 0, "delivered": 0, "failed": 0}
+        )
+        bucket["attempts"] += int(count)
+        if delivery_status in {"sent", "delivered", "read", "skipped"}:
+            bucket["delivered"] += int(count)
+        elif delivery_status == "failed":
+            bucket["failed"] += int(count)
     last_delivery_failure = db.execute(
         select(NotificationDelivery).where(
             NotificationDelivery.election_id == election.id,
@@ -185,8 +213,14 @@ def overview(
             "security_alerts": _security_alerts(db, election.id),
             "otp_delivery": {
                 "mode": settings.delivery_mode,
+                "requests": otp_requests,
                 "sent": otp_sent,
                 "failed": otp_failed_delivery,
+                "by_channel": [
+                    {"channel": channel, **counts}
+                    for channel, counts in by_channel.items()
+                ],
+                "providers": provider_status(),
                 "last_failure_at": (
                     last_delivery_failure.created_at.isoformat() if last_delivery_failure else None
                 ),

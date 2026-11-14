@@ -65,11 +65,35 @@ class Settings:
     smtp_password: str = os.getenv("SMTP_PASSWORD", "")
     smtp_starttls: bool = _bool("SMTP_STARTTLS", True)
 
-    sms_provider: str = os.getenv("SMS_PROVIDER", "none")  # twilio | none
+    # Termii is the required SMS gateway. Twilio remains available only as a
+    # legacy fallback for deployments that have not migrated yet.
+    sms_provider: str = os.getenv("SMS_PROVIDER", "termii")  # termii | twilio | none
+    termii_api_key: str = os.getenv("TERMII_API_KEY", "")
+    termii_sender_id: str = os.getenv("TERMII_SENDER_ID", "")
+    termii_channel: str = os.getenv("TERMII_CHANNEL", "dnd")  # dnd is required for OTPs
+    termii_api_base: str = os.getenv("TERMII_API_BASE", "https://api.ng.termii.com").rstrip("/")
+
     twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
     twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
     twilio_from_number: str = os.getenv("TWILIO_FROM_NUMBER", "")
     sms_api_base: str = os.getenv("SMS_API_BASE", "https://api.twilio.com").rstrip("/")
+
+    # WhatsApp uses the official Meta WhatsApp Business Platform / Cloud API.
+    # A personal WhatsApp account or browser automation is never used.
+    whatsapp_provider: str = os.getenv("WHATSAPP_PROVIDER", "none")  # meta | none
+    whatsapp_access_token: str = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
+    whatsapp_phone_number_id: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
+    whatsapp_business_account_id: str = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "")
+    whatsapp_api_base: str = os.getenv(
+        "WHATSAPP_API_BASE", "https://graph.facebook.com/v27.0"
+    ).rstrip("/")
+    whatsapp_template_name: str = os.getenv("WHATSAPP_TEMPLATE_NAME", "sjc_election_otp")
+    whatsapp_template_language: str = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en_US")
+    # Authentication templates normally take the code as {{1}}. A two-parameter
+    # template may take the code as {{1}} and expiry minutes as {{2}}.
+    whatsapp_template_parameter_count: int = _int("WHATSAPP_TEMPLATE_PARAMETER_COUNT", 1)
+    whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "")
+    whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
 
     otp_delivery_timeout_seconds: int = _int("OTP_DELIVERY_TIMEOUT_SECONDS", 10)
 
@@ -109,9 +133,26 @@ class Settings:
 
     @property
     def sms_configured(self) -> bool:
-        if self.sms_provider.strip().lower() != "twilio":
+        provider = self.sms_provider.strip().lower()
+        if provider == "termii":
+            return bool(self.termii_api_key and self.termii_sender_id)
+        if provider == "twilio":
+            return bool(
+                self.twilio_account_sid
+                and self.twilio_auth_token
+                and self.twilio_from_number
+            )
+        return False
+
+    @property
+    def whatsapp_configured(self) -> bool:
+        if self.whatsapp_provider.strip().lower() != "meta":
             return False
-        return bool(self.twilio_account_sid and self.twilio_auth_token and self.twilio_from_number)
+        return bool(
+            self.whatsapp_access_token
+            and self.whatsapp_phone_number_id
+            and self.whatsapp_template_name
+        )
 
     @property
     def delivery_channels(self) -> list[str]:
@@ -120,6 +161,8 @@ class Settings:
             channels.append("email")
         if self.sms_configured:
             channels.append("sms")
+        if self.whatsapp_configured:
+            channels.append("whatsapp")
         return channels
 
     @property
@@ -149,7 +192,7 @@ class Settings:
         if self.seed_password == "ChangeMe!2026":
             issues.append("SEED_DEFAULT_PASSWORD still uses the demo default")
         if not self.delivery_channels:
-            issues.append("no OTP delivery channel is configured (email or SMS)")
+            issues.append("no OTP delivery channel is configured (email, SMS or WhatsApp)")
         if not self.app_origin.lower().startswith("https://"):
             issues.append("APP_ORIGIN must be an https origin in production")
         if "sqlite" in self.database_url:

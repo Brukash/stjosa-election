@@ -12,8 +12,10 @@ the backend on every route, not by the interface.
 | GET | `/health` | Service + database health | |
 | GET | `/public/election` | Active election, ballot, verification settings, public keys | FR105–FR111 |
 | GET | `/public/elections/{id}` | Public configuration of one election | |
-| POST | `/accreditation/request-otp` | Send OTP for a Voter ID | Rate limited, hashed storage; delivers by email/SMS; `503` if no channel configured, `502` on provider failure |
-| POST | `/accreditation/verify-otp` | Validate OTP, create accreditation + short session | Attempt-limited, audited |
+| POST | `/accreditation/otp-options` | Read-only diagnostic view of Email/SMS/WhatsApp masked destinations | No OTP sent; accreditation uses `request-otp` directly; WhatsApp requires consent |
+| POST | `/accreditation/request-otp` | Generate one OTP and send it simultaneously through every available registered channel | Rate limited, hashed storage; `503` if no channel is available, `502` only if no provider confirms |
+| POST | `/accreditation/verify-otp` | Validate the OTP received through any channel; create accreditation + short session | Five attempts, five-minute expiry, one shared challenge, duplicate use rejected |
+| GET/POST | `/webhooks/whatsapp` | Meta verification and delivery-status callbacks | POST requires `X-Hub-Signature-256`; no OTP or full contact stored |
 | POST | `/accreditation/credential` | Sign a **blinded** credential request | One active issuance per voter/election |
 | POST | `/voting/prepare` | Validate credential, encrypt selections, store prepared ballot | Not yet counted |
 | POST | `/voting/{prepared_id}/challenge` | Reveal challenge material; spoil ballot | FR097–FR104, permanently excluded |
@@ -28,10 +30,21 @@ the backend on every route, not by the interface.
 | GET | `/results/public/{election_id}` | Declared results for an election | |
 | GET | `/monitoring/{election_id}/result-certificate.pdf` | Signed result certificate | |
 
-`POST /accreditation/request-otp` response includes `delivery_channel` (`email`, `sms` or
-`development`), the masked `delivery` destination, `expires_in` and `max_attempts`. `dev_otp` is
-present only when the backend is in local development, `APP_ORIGIN` is loopback and
-`DEV_EXPOSE_OTP=true`; it is never returned in production or staging.
+`POST /accreditation/request-otp` body: `{ "election_id": "…", "voter_id": "…" }`. It generates
+one OTP and attempts the same value concurrently through Resend email, Termii SMS and Meta WhatsApp
+for every available registered contact. The response includes `delivery_channel` (`multi` when more
+than one channel confirmed), `delivery_channels`, and a `deliveries` array of
+`{ channel, provider, status, recipient_masked, provider_message_id, error }` rows. Channel status is
+`sent`, `failed`, `unavailable` (no registered contact, consent or provider) or `skipped` for local
+development. The OTP value itself is never returned. `dev_otp` is present only when the backend is in
+local development, `APP_ORIGIN` is loopback and `DEV_EXPOSE_OTP=true`; it is never returned in
+production or staging.
+
+If at least one provider confirms delivery, the request returns `200` even when another channel
+failed. If every attempted provider fails, it returns `502` and the challenge is expired. If no
+channel is available at all, it returns `503` before a challenge is created. A successful
+`verify-otp` consumes the single challenge, so the code is invalid on every channel and only one
+accreditation record can be created.
 
 `POST /voting/prepare` body:
 
@@ -70,6 +83,7 @@ the AES-GCM ciphertext decrypts to those selections and that both commitments ma
 | GET | `/accounts` | `accounts.manage` |
 | POST | `/accounts` | `accounts.manage` |
 | PATCH | `/accounts/{id}` | `accounts.manage` (last active Super Administrator protected) |
+| GET | `/settings/delivery` | `technical.settings` (provider readiness, limits and webhook status; no secrets) |
 
 ### Elections and configuration
 

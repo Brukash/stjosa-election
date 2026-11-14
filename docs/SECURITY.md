@@ -42,15 +42,28 @@ coercion and vote-buying risk.
 
 ### 1.3a OTP delivery
 
-- OTPs are delivered by email (Resend HTTP API, or SMTP) or by Twilio SMS to the contact held on the
-  approved register. The browser cannot choose the destination.
-- OTPs are stored only as HMAC-SHA256 digests; delivery records store a masked recipient, provider
-  message id, status and a truncated failure reason — never the code or the full address.
+- After one Voter ID submission, the backend generates one OTP and sends that same value
+  simultaneously by email (Resend HTTP API, or SMTP), Termii SMS and the official Meta WhatsApp
+  Business Platform. The browser cannot select a channel or choose/change a destination; every
+  destination comes from the approved register. WhatsApp is skipped without `whatsapp_consent`
+  while email and SMS continue.
+- OTPs are six digits, stored only as HMAC-SHA256 digests, expire after five minutes, allow five
+  incorrect attempts, and are rate-limited per voter/hour with a resend cooldown. One challenge and
+  one digest cover all channels; verification through any channel consumes it everywhere. A resend
+  expires the previous challenge, so only one challenge can be active.
+- Delivery records store a masked recipient, provider message id, status and a truncated failure
+  reason — never the code or the full address. Meta status callbacks are HMAC-verified and contain no
+  OTP.
 - On-screen delivery exists only for local development: `ENVIRONMENT=development`, a loopback
   `APP_ORIGIN` and `DEV_EXPOSE_OTP=true` are all required. Production/staging or a public origin
   disables it regardless of the flag.
 - With no channel configured outside development, OTP issuance returns `503` rather than exposing a
-  code; a provider failure returns `502` and expires the challenge immediately.
+  code. Provider calls run concurrently and failures are isolated; a partial failure still returns
+  the confirmed channels and the voter can use whichever message arrives. Only when every attempted
+  provider fails does the API return `502` and expire the challenge. A complete failure can be
+  retried immediately without a cooldown dead end.
+- Committee monitoring reports requests, successful/failed deliveries and channel usage without OTPs
+  or full contact data. Provider credentials are read only from server-side configuration.
 
 ### 1.4 Published commitments and tally
 
@@ -99,8 +112,8 @@ coercion and vote-buying risk.
 
 ## 4. Test evidence
 
-`backend/scripts/smoke_test.py` runs a complete mock election and asserts 22 properties. Last run
-against the delivered code: **22/22 passed**.
+`backend/scripts/smoke_test.py` runs a complete mock election and asserts the full set of mock-election
+properties. Last run against the delivered code: **all checks passed**.
 
 1. Health check and public election payload
 2. Ballot contains positions and candidates
@@ -131,18 +144,22 @@ Additionally exercised in a real browser (Chromium): OTP accreditation, in-brows
 blinding/unblinding and verification, ballot selection, challenge verification (all four browser
 checks passed), casting, and receipt issuance.
 
-`backend/scripts/test_otp_delivery.py` exercises real provider HTTP payloads against a local mock
-(no credentials required). Last run: **9/9 passed**.
+`backend/scripts/test_otp_delivery.py` exercises real provider HTTP payloads against local mock
+providers (no credentials required). Last run: **14/14 passed**.
 
-1. OTP delivered by email; no OTP in the API response
-2. Provider received the OTP addressed to the registered email only
-3. The emailed OTP completes accreditation
-4. Delivery recorded without the OTP or full address
-5. On-screen OTP refused for non-loopback origin and for production/staging
-6. Production without a provider fails closed (503, no OTP)
-7. Twilio SMS fallback sends E.164 and the code accredits the voter
-8. Provider outage returns 502, records the failure and never leaks the OTP
-9. Local development still shows the OTP when explicitly enabled
+1. One request sends one identical OTP through Resend, Termii and Meta WhatsApp
+2. The same OTP verifies through the SMS copy and completes accreditation
+3. Successful verification invalidates the OTP across all channels; duplicate accreditation rejected
+4. A failed email provider does not cancel Termii and WhatsApp delivery
+5. All-provider failure returns 502, records failures and leaves no usable OTP
+6. Five incorrect OTP attempts lock the shared challenge
+7. Expired OTP rejection
+8. Resend cooldown enforced; resend invalidates the previous OTP
+9. WhatsApp without consent is reported unavailable without stopping Email or SMS
+10. Contact records inaccessible without register permission
+11. Committee monitoring exposes channel counts/provider readiness without secrets
+12. Production without a provider fails closed
+13. Local on-screen delivery only when enabled; on-screen OTP refused outside local development
 
 Also checked manually: authorization failures return 403, invalid credentials 401, locked
 configuration 409, and no ballot table row contains a voter identifier.
@@ -151,9 +168,11 @@ configuration 409, and no ballot table row contains a voter identifier.
 
 1. **Independent cryptographic review** of the blind signature and challenge protocol (SRS §12.4) has
    not been performed. Do not run a real election without it.
-2. **OTP deliverability**: Resend/SMTP and Twilio are integrated, but the committee must verify its
-   sender domain (SPF/DKIM/DMARC) or Twilio sender for Nigeria, set `ENVIRONMENT=production`, and
-   monitor `notification_deliveries` failures. No provider credentials are committed.
+2. **OTP deliverability**: Email, SMS and Meta WhatsApp are integrated against mock providers, but
+   the committee must verify its Resend sender domain (SPF/DKIM/DMARC), Termii sender ID for Nigeria,
+   approved WhatsApp authentication template, webhook secret and recorded voter consent, then run
+   simultaneous live test messages with `ENVIRONMENT=production`. No provider credentials are
+   committed.
 3. **Key management**: file-based tally keys with a software master key. Use an HSM/KMS with
    dual-control release, documented rotation and split-knowledge custody.
 4. **Load and availability testing** at 2,500 voters / 500 concurrent users has not been performed.
@@ -188,5 +207,5 @@ configuration 409, and no ballot table row contains a voter identifier.
 | 16 | Results require approval | Implemented, tested |
 | 17 | Audit reports | Implemented, tested |
 | 18 | Independent security testing | **Not performed** — required |
-| 19 | Backup/recovery tested | Documented in OPERATIONS.md; **not executed on Supabase** |
-| 20 | Full mock election | Executed (22 checks) |
+| 19 | Backup/recovery tested | **Executed 14 Nov 2026** — Supabase dump → PostgreSQL 17; health, election and login verified |
+| 20 | Full mock election | Executed (full smoke-test suite) |

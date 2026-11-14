@@ -6,7 +6,7 @@ import secrets
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from .. import crypto
@@ -19,14 +19,15 @@ from ..models import (
     CredentialIssuance,
     Election,
     ElectionEvent,
+    NotificationDelivery,
     OtpChallenge,
     Profile,
     Voter,
 )
-from ..notifications import deliver_otp, delivery_available
-from ..schemas import CredentialRequest, OtpRequest, OtpVerify
+from ..notifications import channel_options, deliver_otp_all
+from ..schemas import CredentialRequest, OtpOptionsRequest, OtpRequest, OtpVerify
 from ..services import get_settings_row, maybe_auto_close, now, public_settings_dict, resolve_public_election
-from ..security import generate_otp, otp_digest, otp_matches
+from ..security import as_aware, generate_otp, otp_digest, otp_matches
 
 router = APIRouter(prefix="/accreditation", tags=["accreditation"])
 
@@ -51,6 +52,70 @@ def _active_issuance(db: Session, accreditation_id: str) -> CredentialIssuance |
     ).scalars().first()
 
 
+def _eligible_voter(db: Session, election: Election, voter_id: str) -> Voter:
+    voter = _voter_by_id(db, election, voter_id)
+    if not voter or not voter.is_eligible or voter.register_status != "approved":
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "That Voter ID is not on the approved electoral register",
+        )
+    return voter
+
+
+def _ensure_not_issued(db: Session, election: Election, voter: Voter) -> None:
+    accreditation = db.execute(
+        select(AccreditationRecord).where(
+            AccreditationRecord.election_id == election.id,
+            AccreditationRecord.voter_row_id == voter.id,
+        )
+    ).scalar_one_or_none()
+    if accreditation and _active_issuance(db, accreditation.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A voting credential has already been issued to this Voter ID. "
+            "Contact an Accreditation Officer if it was lost.",
+        )
+
+
+@router.post("/otp-options")
+def otp_options(payload: OtpOptionsRequest, request: Request, db: Session = Depends(get_db)):
+    """Return the registered channels' availability without sending an OTP.
+
+    Only masked destinations are returned. Accreditation itself requests the
+    OTP through every available channel; this route remains a read-only
+    diagnostic view. It never changes the register, creates a challenge or
+    reveals a full email address or phone.
+    """
+    election = resolve_public_election(db, payload.election_id)
+    maybe_auto_close(db, election)
+    if election.status not in OTP_ALLOWED_STATUSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Accreditation is not open for this election")
+
+    try:
+        voter = _eligible_voter(db, election, payload.voter_id)
+        _ensure_not_issued(db, election, voter)
+    except HTTPException:
+        record_audit(
+            db, action="otp.options", outcome="failure", election_id=election.id,
+            ip_address=client_ip(request), detail={"reason": "not_available"},
+        )
+        db.commit()
+        raise
+
+    options = channel_options(voter)
+    return {
+        "voter_id": voter.voter_id,
+        "channels": [option.as_dict() for option in options],
+        "expires_in": settings.otp_ttl_seconds,
+        "resend_after_seconds": settings.otp_resend_seconds,
+        "max_attempts": settings.otp_max_attempts,
+        "message": (
+            "A single OTP is sent simultaneously to every available registered channel. "
+            "You may enter the code received through any one of them."
+        ),
+    }
+
+
 @router.post("/request-otp")
 def request_otp(payload: OtpRequest, request: Request, db: Session = Depends(get_db)):
     election = resolve_public_election(db, payload.election_id)
@@ -70,18 +135,26 @@ def request_otp(payload: OtpRequest, request: Request, db: Session = Depends(get
             "That Voter ID is not on the approved electoral register",
         )
 
-    accreditation = db.execute(
-        select(AccreditationRecord).where(
-            AccreditationRecord.election_id == election.id,
-            AccreditationRecord.voter_row_id == voter.id,
+    _ensure_not_issued(db, election, voter)
+
+    delivery_options = channel_options(voter)
+    if not any(option.available for option in delivery_options):
+        record_audit(
+            db, action="otp.request", outcome="failure", election_id=election.id,
+            entity="voter", entity_id=voter.id, ip_address=client_ip(request),
+            detail={"reason": "delivery_not_configured"},
         )
-    ).scalar_one_or_none()
-    if accreditation and _active_issuance(db, accreditation.id):
+        db.commit()
         raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "A voting credential has already been issued to this Voter ID. "
-            "Contact an Accreditation Officer if it was lost.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "One-time password delivery is not available for the registered contacts. "
+            "Contact the Electoral Committee.",
         )
+
+    # Serialise concurrent requests for the same voter. Older challenges are
+    # expired only after every validation (especially the resend cooldown), so
+    # a rejected early resend cannot destroy the code the voter already has.
+    db.execute(select(Voter.id).where(Voter.id == voter.id).with_for_update())
 
     hour_ago = now() - timedelta(hours=1)
     recent_requests = db.scalar(
@@ -96,21 +169,40 @@ def request_otp(payload: OtpRequest, request: Request, db: Session = Depends(get
         select(OtpChallenge).where(OtpChallenge.voter_row_id == voter.id)
         .order_by(OtpChallenge.created_at.desc())
     ).scalars().first()
-    if latest and (now() - latest.created_at).total_seconds() < settings.otp_resend_seconds:
-        wait = int(settings.otp_resend_seconds - (now() - latest.created_at).total_seconds())
+    latest_deliveries = []
+    if latest:
+        latest_deliveries = db.execute(
+            select(NotificationDelivery)
+            .where(NotificationDelivery.challenge_id == latest.id)
+            .order_by(NotificationDelivery.created_at.desc())
+        ).scalars().all()
+    # If every provider failed, the voter may retry immediately. If any channel
+    # confirmed delivery, the normal resend cooldown still applies. The hourly
+    # cap applies in both cases.
+    latest_has_success = any(
+        delivery.status in {"sent", "delivered", "read", "skipped"}
+        for delivery in latest_deliveries
+    )
+    latest_created = as_aware(latest.created_at) if latest else None
+    if (
+        latest_created
+        and (not latest_deliveries or latest_has_success)
+        and (now() - latest_created).total_seconds() < settings.otp_resend_seconds
+    ):
+        wait = int(settings.otp_resend_seconds - (now() - latest_created).total_seconds())
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, f"Please wait {max(wait, 1)}s before requesting another OTP.")
 
-    if not delivery_available(voter):
-        record_audit(
-            db, action="otp.request", outcome="failure", election_id=election.id,
-            entity="voter", entity_id=voter.id, ip_address=client_ip(request),
-            detail={"reason": "delivery_not_configured"},
+    # A resend can never leave two usable OTPs active at once.
+    db.execute(
+        update(OtpChallenge)
+        .where(
+            OtpChallenge.voter_row_id == voter.id,
+            OtpChallenge.consumed_at.is_(None),
+            OtpChallenge.expires_at > now(),
         )
-        db.commit()
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "One-time password delivery is not available. Contact the Electoral Committee.",
-        )
+        .values(expires_at=now()),
+        execution_options={"synchronize_session": False},
+    )
 
     challenge_id = crypto.sha256_hex("challenge", secrets.token_hex(16))[:36]
     otp = generate_otp()
@@ -126,7 +218,7 @@ def request_otp(payload: OtpRequest, request: Request, db: Session = Depends(get
     db.add(challenge)
     db.flush()
 
-    delivery = deliver_otp(
+    deliveries = deliver_otp_all(
         db,
         election=election,
         voter=voter,
@@ -134,49 +226,70 @@ def request_otp(payload: OtpRequest, request: Request, db: Session = Depends(get
         challenge_id=challenge_id,
         request_ip=client_ip(request),
     )
+    confirmed = [delivery for delivery in deliveries if delivery.delivered]
+    attempted = [delivery for delivery in deliveries if delivery.status != "unavailable"]
 
-    if not delivery.delivered:
-        # Never reveal or keep a usable OTP when delivery failed.
+    if not confirmed:
+        # Never reveal or keep a usable OTP when every provider failed.
         challenge.expires_at = now()
         record_audit(
             db, action="otp.deliver", outcome="failure", election_id=election.id,
             entity="voter", entity_id=voter.id, ip_address=client_ip(request),
-            detail={"channel": delivery.channel, "provider": delivery.provider, "error": delivery.error},
+            detail={
+                "channels": [
+                    {"channel": item.channel, "provider": item.provider, "status": item.status}
+                    for item in deliveries
+                ]
+            },
         )
         db.commit()
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            "We could not deliver your one-time password. Please try again shortly or contact the "
-            "Accreditation Officer.",
+            "We could not confirm delivery of your one-time password through any registered channel. "
+            "Please try again shortly or contact the Accreditation Officer.",
         )
 
     record_audit(
         db, action="otp.deliver", election_id=election.id, entity="voter", entity_id=voter.id,
         ip_address=client_ip(request),
-        detail={"channel": delivery.channel, "provider": delivery.provider, "status": delivery.status},
+        detail={
+            "channels": [
+                {"channel": item.channel, "provider": item.provider, "status": item.status}
+                for item in deliveries
+            ]
+        },
     )
     db.commit()
 
-    development_delivery = delivery.channel == "development" and settings.expose_dev_otp
-    if delivery.channel == "email":
-        message = f"A one-time password has been emailed to {delivery.recipient_masked}."
-    elif delivery.channel == "sms":
-        message = f"A one-time password has been sent by SMS to {delivery.recipient_masked}."
-    else:
+    development_delivery = any(
+        item.channel == "development" and item.status == "skipped" for item in deliveries
+    )
+    if development_delivery:
         message = "Local development delivery: the one-time password is shown below."
+    elif len(confirmed) == len(attempted):
+        message = f"The same one-time password was sent to {len(confirmed)} registered channel(s)."
+    else:
+        message = (
+            f"The one-time password was confirmed on {len(confirmed)} of {len(attempted)} "
+            "attempted channels. Check the status below and use whichever message arrives."
+        )
 
     return {
         "challenge_id": challenge_id,
         "voter_id": voter.voter_id,
-        "delivery": delivery.recipient_masked,
-        "delivery_channel": delivery.channel,
+        "delivery": confirmed[0].recipient_masked if confirmed else "—",
+        "delivery_channel": "multi" if len(confirmed) > 1 else confirmed[0].channel,
+        "delivery_channels": [item.channel for item in confirmed],
+        "deliveries": [item.as_dict() for item in deliveries],
         "expires_in": settings.otp_ttl_seconds,
+        "expires_at": challenge.expires_at.isoformat(),
+        "resend_after_seconds": settings.otp_resend_seconds,
         "max_attempts": settings.otp_max_attempts,
         "message": message,
         "dev_otp": otp if development_delivery else None,
         "dev_note": (
             "Displayed only because this backend is running in local development on a loopback "
-            "origin. Production requires a configured email or SMS provider."
+            "origin. Production requires a configured email, SMS or WhatsApp provider."
             if development_delivery else None
         ),
     }
@@ -198,6 +311,12 @@ def verify_otp(payload: OtpVerify, request: Request, db: Session = Depends(get_d
 
         expires = expires.replace(tzinfo=timezone.utc)
     if expires <= now():
+        record_audit(
+            db, action="otp.verify", outcome="failure", election_id=election.id,
+            ip_address=client_ip(request),
+            detail={"reason": "expired", "voter_id": voter.voter_id},
+        )
+        db.commit()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "The OTP has expired. Request a new one.")
     if challenge.attempts >= challenge.max_attempts:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Maximum verification attempts reached. Request a new OTP.")

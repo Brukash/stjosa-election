@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from . import crypto
@@ -128,6 +128,19 @@ def seed_database(db: Session) -> dict:
 
     existing = db.execute(select(Election).order_by(Election.created_at)).scalars().first()
     if existing:
+        # Demo voter records are fictional; keep their WhatsApp consent current
+        # when an older development database is upgraded.
+        demo_voter_ids = [row[0] for row in VOTERS]
+        db.execute(
+            update(Voter)
+            .where(
+                Voter.election_id == existing.id,
+                Voter.voter_id.in_(demo_voter_ids),
+                Voter.whatsapp_consent.is_(False),
+            )
+            .values(whatsapp_consent=True)
+        )
+        db.commit()
         return {"seeded_election": False, "election_id": existing.id, "accounts": DEMO_ACCOUNTS}
 
     now = datetime.now(timezone.utc)
@@ -188,6 +201,9 @@ def seed_database(db: Session) -> dict:
             full_name=full_name,
             email=f"{_slug(full_name)}@alumni.sjcjos.edu.ng",
             phone="+234803" + f"{abs(hash(voter_id)) % 10_000_000:07d}",
+            # Fictional demo alumni are seeded with WhatsApp consent so all three
+            # channels can be exercised locally. Real imports must set it explicitly.
+            whatsapp_consent=True,
             alumni_set=alumni_set,
             graduation_year=year,
             is_eligible=True,

@@ -5,14 +5,15 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, Card, Loading, SectionHeading, Stat } from "@/components/ui";
 import { api, can, getProfile } from "@/lib/api";
 
-const SAMPLE = `voter_id,full_name,email,phone,alumni_set,graduation_year
-SJC/AL/2016/025,Jane Doe,jane.doe@example.com,+2348000000000,Lagos Chapter,2016`;
+const SAMPLE = `voter_id,full_name,email,phone,whatsapp_consent,alumni_set,graduation_year
+SJC/AL/2016/025,Jane Doe,jane.doe@example.com,+2348000000000,true,Lagos Chapter,2016`;
 
 const EMPTY_VOTER = {
   voter_id: "",
   full_name: "",
   email: "",
   phone: "",
+  whatsapp_consent: false,
   alumni_set: "",
   graduation_year: "",
   is_eligible: true,
@@ -76,6 +77,7 @@ export default function RegisterPage() {
           full_name: voterForm.full_name.trim(),
           email: voterForm.email.trim() || null,
           phone: voterForm.phone.trim() || null,
+          whatsapp_consent: voterForm.whatsapp_consent,
           alumni_set: voterForm.alumni_set.trim() || "General",
           graduation_year: voterForm.graduation_year.trim()
             ? Number(voterForm.graduation_year)
@@ -117,6 +119,26 @@ export default function RegisterPage() {
         method: "PATCH",
         auth: true,
         body: JSON.stringify({ is_eligible: !voter.is_eligible, note: "Register maintained by committee" }),
+      });
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleWhatsappConsent(voter: any) {
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/api/register/voters/${voter.id}`, {
+        method: "PATCH",
+        auth: true,
+        body: JSON.stringify({
+          whatsapp_consent: !voter.whatsapp_consent,
+          note: "WhatsApp consent recorded by the Electoral Committee",
+        }),
       });
       load();
     } catch (err: any) {
@@ -189,7 +211,7 @@ export default function RegisterPage() {
             </div>
             <p className="text-xs text-ink/45">
               Required columns: <span className="font-mono">voter_id, full_name</span>. Optional:{" "}
-              <span className="font-mono">email, phone, alumni_set, graduation_year</span>.
+              <span className="font-mono">email, phone, whatsapp_consent, alumni_set, graduation_year</span>.
             </p>
           </form>
           ) : (
@@ -302,6 +324,17 @@ export default function RegisterPage() {
               />
               Eligible to vote
             </label>
+            <label className="flex items-center gap-2 self-end pb-2 text-sm text-ink/70">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-green"
+                checked={voterForm.whatsapp_consent}
+                onChange={(event) =>
+                  setVoterForm({ ...voterForm, whatsapp_consent: event.target.checked })
+                }
+              />
+              WhatsApp OTP consent recorded
+            </label>
             <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-2">
               <button
                 className="btn-primary"
@@ -327,6 +360,7 @@ export default function RegisterPage() {
                 <th>Name</th>
                 <th>Alumni set</th>
                 <th>Status</th>
+                <th>WhatsApp</th>
                 <th>Accredited</th>
                 {canApprove ? <th /> : null}
               </tr>
@@ -345,6 +379,22 @@ export default function RegisterPage() {
                       {voter.register_status}
                     </span>
                     {!voter.is_eligible ? <span className="pill-red ml-1">ineligible</span> : null}
+                  </td>
+                  <td>
+                    {voter.whatsapp_consent ? (
+                      <span className="pill-green">Opted in</span>
+                    ) : (
+                      <span className="pill-grey">No consent</span>
+                    )}
+                    {canApprove && voter.phone ? (
+                      <button
+                        className="ml-2 text-[10px] font-semibold text-ink/45 underline hover:text-ink"
+                        onClick={() => toggleWhatsappConsent(voter)}
+                        disabled={busy}
+                      >
+                        {voter.whatsapp_consent ? "Withdraw" : "Record"}
+                      </button>
+                    ) : null}
                   </td>
                   <td>{voter.accredited ? <span className="pill-green">yes</span> : <span className="text-xs text-ink/35">no</span>}</td>
                   {canApprove ? (

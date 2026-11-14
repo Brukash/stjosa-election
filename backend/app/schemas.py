@@ -120,19 +120,25 @@ class VoterCreate(BaseModel):
     full_name: str
     email: str | None = None
     phone: str | None = None
+    whatsapp_consent: bool = False
     alumni_set: str = "General"
     graduation_year: int | None = None
     is_eligible: bool = True
 
 
 class EligibilityUpdate(BaseModel):
-    is_eligible: bool
+    is_eligible: bool | None = None
+    whatsapp_consent: bool | None = None
     note: str | None = None
 
 
-class OtpRequest(BaseModel):
+class OtpOptionsRequest(BaseModel):
     election_id: str | None = None
     voter_id: str
+
+
+class OtpRequest(OtpOptionsRequest):
+    """The voter supplies only the election and Voter ID; delivery is automatic."""
 
 
 class OtpVerify(BaseModel):

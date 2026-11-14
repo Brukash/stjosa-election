@@ -8,8 +8,8 @@ certification and must be signed off by people outside the development team.**
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| Functional mock election | Passed | `backend/scripts/smoke_test.py` — 23 checks: accreditation, credential, challenge, cast, receipts, commitments, dual-control count, declaration, audit report |
-| OTP delivery | Passed against mock provider | `backend/scripts/test_otp_delivery.py` — 9 checks; no live provider credentials used |
+| Functional mock election | Passed | `backend/scripts/smoke_test.py` — full suite: accreditation, credential, challenge, cast, receipts, commitments, dual-control count, declaration, audit report |
+| OTP delivery | Passed against mock providers | `backend/scripts/test_otp_delivery.py` — 14 checks covering simultaneous one-OTP fan-out through Resend, Termii and Meta WhatsApp, partial/all-provider failure, expiry, duplicate accreditation, cooldown, consent, monitoring and abuse controls; no live provider credentials used |
 | MFA | Passed | Enrol → activate → login without code (401), wrong code (401), correct code (200); UI at `/admin/security` |
 | Verification settings independence | Passed | Same official cannot configure and approve; second official approval enforced; smoke check |
 | Deployment preflight | Passed locally | `python scripts/preflight.py` → READY (31 tables, no production issues in development) |
@@ -17,7 +17,7 @@ certification and must be signed off by people outside the development team.**
 | Independent penetration test | **Not performed** | External supplier required |
 | Performance test at target load | **Not performed** | Only a local indicative run (below) |
 | Committee pilot | **Not performed** | Plan below |
-| Backup restore drill | **Not performed** | Procedure in OPERATIONS.md §6 |
+| Backup restore drill | **Passed 14 Nov 2026** | Supabase custom dump restored into PostgreSQL 17; 5 profiles, 1 election and 24 voters recovered; `/api/health`, public election and Chairman login verified |
 
 ## 2. Independent security review scope
 
@@ -97,5 +97,5 @@ security finding.
 - [ ] `python scripts/preflight.py` → READY
 - [ ] MFA enrolled for every official; recovery/reset procedure agreed
 - [ ] Independent security review signed off; performance target met; pilot signed off
-- [ ] Backup schedule, encryption and restore drill complete
+- [x] Backup restore drill complete (14 Nov 2026); production backup encryption and schedule still to be confirmed
 - [ ] Tally key custody (KMS/HSM) and dual-control release agreed

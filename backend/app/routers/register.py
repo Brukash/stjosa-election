@@ -17,6 +17,7 @@ from ..services import election_stats, get_election
 router = APIRouter(prefix="/register", tags=["register"])
 
 REQUIRED_COLUMNS = {"voter_id", "full_name"}
+TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 
 
 def _voter_dict(voter: Voter, accredited: bool) -> dict:
@@ -26,6 +27,7 @@ def _voter_dict(voter: Voter, accredited: bool) -> dict:
         "full_name": voter.full_name,
         "email": voter.email,
         "phone": voter.phone,
+        "whatsapp_consent": voter.whatsapp_consent,
         "alumni_set": voter.alumni_set,
         "graduation_year": voter.graduation_year,
         "is_eligible": voter.is_eligible,
@@ -74,7 +76,7 @@ def import_register(
     if not reader.fieldnames or not REQUIRED_COLUMNS.issubset({f.strip().lower() for f in reader.fieldnames}):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "CSV must include at least the columns: voter_id, full_name (optional: email, phone, alumni_set, graduation_year)",
+            "CSV must include at least the columns: voter_id, full_name (optional: email, phone, whatsapp_consent, alumni_set, graduation_year)",
         )
 
     existing = {
@@ -104,6 +106,7 @@ def import_register(
             full_name=full_name,
             email=row.get("email") or None,
             phone=row.get("phone") or None,
+            whatsapp_consent=(row.get("whatsapp_consent") or "").lower() in TRUE_VALUES,
             alumni_set=row.get("alumni_set") or "General",
             graduation_year=graduation_year,
             is_eligible=True,
@@ -175,12 +178,23 @@ def update_eligibility(
     election = get_election(db, voter.election_id)
     if election.locked_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "The register is locked: voting has begun")
-    voter.is_eligible = payload.is_eligible
-    if not payload.is_eligible:
-        voter.register_status = "excluded"
-    record_audit(db, action="register.eligibility", election_id=election.id, actor_id=profile.id,
+    if payload.is_eligible is None and payload.whatsapp_consent is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No register change was supplied")
+    if payload.is_eligible is not None:
+        voter.is_eligible = payload.is_eligible
+        if not payload.is_eligible:
+            voter.register_status = "excluded"
+    if payload.whatsapp_consent is not None:
+        voter.whatsapp_consent = payload.whatsapp_consent
+    audit_action = (
+        "register.consent"
+        if payload.is_eligible is None and payload.whatsapp_consent is not None
+        else "register.eligibility"
+    )
+    record_audit(db, action=audit_action, election_id=election.id, actor_id=profile.id,
                  entity="voter", entity_id=voter.id, ip_address=client_ip(request),
-                 detail={"is_eligible": payload.is_eligible, "note": payload.note})
+                 detail={"is_eligible": payload.is_eligible,
+                         "whatsapp_consent": payload.whatsapp_consent, "note": payload.note})
     db.commit()
     return _voter_dict(voter, False)
 

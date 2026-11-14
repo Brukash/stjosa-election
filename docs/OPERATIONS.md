@@ -31,6 +31,7 @@ Frontend: `NEXT_PUBLIC_API_URL=https://api.elections.your-domain.org`.
    - `supabase/migrations/0001_init.sql` — 30 tables (schema generated from the ORM).
    - `supabase/migrations/0002_security.sql` — RLS, grants, append-only audit trigger, ballot
      immutability, receipt/commitment integrity check.
+   - `supabase/migrations/0003_otp_channels.sql` — voter WhatsApp consent and delivery-channel index.
 3. Confirm RLS is enabled on all sensitive tables (`Supabase → Database → Tables`).
 4. Create staff accounts through the application (or seed then change every password).
 5. Never expose the database connection string to the browser; the Next.js app talks only to FastAPI.
@@ -44,8 +45,13 @@ cd backend
 
 ## 2a. OTP delivery provider setup
 
-OTPs must reach the contact on the approved register. Configure one or both channels; the backend
-fails closed (`503`) outside development if neither is configured.
+OTPs must reach the contact on the approved register. Configure email, SMS and/or WhatsApp; the
+backend fails closed (`503`) outside development if none is configured. After one Voter ID entry the
+backend generates one OTP and sends it simultaneously through every available channel. The voter does
+not select a channel, and every destination is taken from the approved register.
+
+The additive migration `supabase/migrations/0003_otp_channels.sql` adds the voter WhatsApp consent
+column. The API also applies that additive column defensively at startup for older deployments.
 
 ### Email — Resend (recommended)
 
@@ -61,14 +67,34 @@ fails closed (`503`) outside development if neither is configured.
 `EMAIL_PROVIDER=smtp` plus `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
 `SMTP_STARTTLS=true`. Works with the association's existing mail host.
 
-### SMS — Twilio
+### SMS — Termii
 
-1. Buy or port a sender that can deliver to Nigerian (+234) numbers; confirm pricing and sender ID
-   rules with Twilio.
-2. Set `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`.
-3. Trial accounts can only message verified numbers: upgrade before the election.
-4. SMS is used when a voter has no email address or no email provider is configured; numbers must be
-   E.164 (`+234…`) on the register.
+1. Create a Termii account and obtain an API key from the dashboard.
+2. Register and get approval for a sender ID (for example `SJCAlumni`) that can deliver to Nigerian
+   (+234) numbers. Confirm transactional/DND routing and pricing before the election.
+3. Set `SMS_PROVIDER=termii`, `TERMII_API_KEY`, `TERMII_SENDER_ID` and `TERMII_CHANNEL=dnd`.
+   Termii's `generic` route is promotional and is not appropriate for OTPs.
+4. Numbers must be E.164 (`+234…`) on the register. SMS is a separate channel from WhatsApp.
+5. The legacy Twilio settings remain in the code only for migration; do not use them for a new
+   election unless Termii cannot provide a sender.
+
+### WhatsApp — Meta WhatsApp Business Platform / Cloud API
+
+1. Create a Meta Business account, a WhatsApp Business Account and a system-user access token with
+   `whatsapp_business_messaging` permission. Never use a personal WhatsApp account or automation.
+2. Register the sending phone number and create an **Authentication** message template (for example
+   `sjc_election_otp`, language `en_US`) with the OTP as the first body parameter. If the approved
+   template has a second expiry parameter, set `WHATSAPP_TEMPLATE_PARAMETER_COUNT=2`.
+3. Set `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
+   `WHATSAPP_TEMPLATE_NAME` and `WHATSAPP_TEMPLATE_LANGUAGE`. Keep the token in the server-side
+   environment/secret store only.
+4. Record each voter's `whatsapp_consent` in the register CSV/import or via the register screen.
+   WhatsApp is reported as unavailable and skipped without consent; email and SMS still proceed.
+5. Set `WHATSAPP_APP_SECRET` and `WHATSAPP_VERIFY_TOKEN`, then subscribe the Meta app to
+   `https://<api-host>/api/webhooks/whatsapp`. Signed delivery/read/failure callbacks update
+   `notification_deliveries`; no OTP is included.
+6. Send a test authentication template to a consented committee number and confirm delivery before
+   the election. The Super Administrator can inspect readiness and limits at `/admin/delivery`.
 
 ### Production guard and preflight
 
@@ -83,7 +109,13 @@ cd backend
 .venv/Scripts/python.exe scripts/preflight.py
 .venv/Scripts/python.exe scripts/check_delivery.py --to-email you@example.org
 .venv/Scripts/python.exe scripts/check_delivery.py --to-phone +2348012345678
+.venv/Scripts/python.exe scripts/check_delivery.py --to-whatsapp +2348012345678
+.venv/Scripts/python.exe scripts/test_otp_delivery.py
 ```
+
+After that, send one live WhatsApp authentication-template test to a consented committee number via
+the Meta dashboard or a small backend test, and confirm the signed status callback reaches
+`/api/webhooks/whatsapp`.
 
 `preflight.py` reports configuration, database reachability, missing tables and recent elections;
 it exits non-zero when production would fail closed. `check_delivery.py` prints the active channels
@@ -169,8 +201,11 @@ logs.
    - Run the audit report and confirm all checks still pass.
 5. Record the recovery event in the election log.
 
-**Recovery test is mandatory before production** (SRS criterion 19). It has not been executed
-against a Supabase project yet.
+**Recovery test was executed on 14 Nov 2026**: a custom-format dump of the Supabase database was
+restored into a local PostgreSQL 17 instance. The restored database contained 5 profiles, 1 election
+and 24 voters, and the application passed health, public-election and Chairman-login checks against
+it. This proves the logical restore path; a production failover drill and encrypted off-site backup
+schedule are still required before go-live.
 
 ## 7. Election-day runbook
 

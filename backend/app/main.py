@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -25,11 +25,38 @@ from .routers import (
     receipts,
     register,
     results,
+    settings as settings_router,
     tally,
     verification,
     voting,
+    webhooks,
 )
 from .seed import seed_database
+
+
+def _ensure_compatibility_columns() -> None:
+    """Apply additive schema changes that create_all cannot add to old tables."""
+    inspector = inspect(engine)
+    if "voters" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("voters")}
+    if "whatsapp_consent" not in columns:
+        statement = (
+            "ALTER TABLE voters ADD COLUMN IF NOT EXISTS whatsapp_consent "
+            "BOOLEAN NOT NULL DEFAULT FALSE"
+            if engine.dialect.name == "postgresql"
+            else "ALTER TABLE voters ADD COLUMN whatsapp_consent BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(statement))
+        except Exception:
+            # A concurrent serverless instance may have added it first.
+            refreshed = {
+                column["name"] for column in inspect(engine).get_columns("voters")
+            }
+            if "whatsapp_consent" not in refreshed:
+                raise
 
 
 def _materialize_keys() -> None:
@@ -62,6 +89,7 @@ async def lifespan(_app: FastAPI):
             "Production configuration is incomplete: " + "; ".join(issues)
         )
     Base.metadata.create_all(bind=engine)
+    _ensure_compatibility_columns()
     demo_seed = os.getenv("DEMO_SEED")
     if demo_seed is None:
         demo_seed = "false" if settings.is_production else "true"
@@ -104,6 +132,8 @@ for router in (
     tally.router,
     results.router,
     monitoring.router,
+    settings_router.router,
+    webhooks.router,
 ):
     app.include_router(router, prefix="/api")
 

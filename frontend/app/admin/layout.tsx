@@ -12,6 +12,7 @@ const NAV = [
   { href: "/admin/accreditation", label: "Accreditation", permission: "accreditation.oversight" },
   { href: "/admin/elections", label: "Elections", permission: "election.view" },
   { href: "/admin/security", label: "Security", permission: "election.view" },
+  { href: "/admin/delivery", label: "Delivery", permission: "technical.settings" },
   { href: "/admin/team", label: "Team & roles", permission: "accounts.manage" },
 ];
 
@@ -21,6 +22,7 @@ function requiredPermissions(pathname: string): string[] | null {
   const segments = pathname.split("/").filter(Boolean);
   if (segments[0] !== "admin") return null;
   if (segments[1] === "team") return ["accounts.manage"];
+  if (segments[1] === "delivery") return ["technical.settings"];
   if (segments[1] === "accreditation") return ["accreditation.oversight"];
   if (segments[1] === "elections" && segments[3]) {
     const tab = segments[3];
