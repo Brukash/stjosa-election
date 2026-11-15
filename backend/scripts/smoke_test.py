@@ -72,7 +72,11 @@ def issue_credential(election: dict, voter_id: str) -> dict:
     })
     unblinded = (int(signed["blind_signature"], 16) * pow(blinding, -1, n)) % n
     assert pow(unblinded, e, n) == message_hash, "unblinded credential does not verify"
-    return {"token": token_hex, "signature": format(unblinded, "x")}
+    return {
+        "token": token_hex,
+        "signature": format(unblinded, "x"),
+        "turnout_token": verified["turnout_token"],
+    }
 
 
 def selections_for(election: dict) -> dict:

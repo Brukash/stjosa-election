@@ -8,7 +8,7 @@
  */
 import { API_BASE } from "./api";
 
-export type Credential = { token: string; signature: string };
+export type Credential = { token: string; signature: string; turnout_token: string };
 export type CredentialKeys = { n: string; e: string; bits: number };
 
 const encoder = new TextEncoder();
@@ -112,7 +112,8 @@ function randomScalarBelow(bound: bigint): bigint {
 export async function issueCredential(
   electionId: string,
   electionReference: string,
-  accreditationToken: string
+  accreditationToken: string,
+  turnoutToken: string
 ): Promise<Credential> {
   const keysResponse = await fetch(`${API_BASE}/api/crypto/${electionId}`, { cache: "no-store" });
   if (!keysResponse.ok) throw new Error("Unable to load credential issuer keys");
@@ -145,7 +146,7 @@ export async function issueCredential(
     throw new Error("Credential signature failed local verification");
   }
 
-  return { token, signature: bigIntToHex(signature) };
+  return { token, signature: bigIntToHex(signature), turnout_token: turnoutToken };
 }
 
 export function storeCredential(electionId: string, credential: Credential) {

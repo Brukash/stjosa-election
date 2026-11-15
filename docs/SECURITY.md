@@ -13,6 +13,11 @@
   ballot. The server records only `sha256(blinded_request)` and the accreditation reference.
 - At cast time the server verifies the signature and unconditionally spends `sha256(t)` in
   `spent_credentials` (unique constraint), which prevents double voting even under concurrency.
+- Turnout reporting uses a separate random turnout token issued with the accreditation session. Its
+  hash is stored on the voter, and a cast requires it before writing `has_voted_at`. The marker is not
+  derived from the credential or ballot, and no ballot, receipt, commitment or selection is stored
+  with it. It reveals whether a voter cast, not how they voted, and monitoring exposes only aggregate
+  counts by alumni set.
 
 ### 1.2 Ballot encryption
 

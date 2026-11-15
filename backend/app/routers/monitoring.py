@@ -47,6 +47,11 @@ LIMITED_AUDIT_ACTIONS = (
 )
 
 HIDDEN_RESULT_STATUSES = {"draft", "configured", "approved", "accreditation_open", "voting_open"}
+TURNOUT_TARGET_PER_SET = 3
+TURNOUT_NOTE = (
+    "Voted counts use a private turnout marker recorded when a ballot is accepted. "
+    "Ballots cast before this report was enabled cannot be attributed and are excluded."
+)
 
 
 def _hourly_ballots(db: Session, election_id: str, hours: int = 24) -> list[dict]:
@@ -64,6 +69,45 @@ def _hourly_ballots(db: Session, election_id: str, hours: int = 24) -> list[dict
         key = (current - timedelta(hours=offset)).strftime("%Y-%m-%dT%H:00")
         series.append({"hour": key, "ballots": buckets.get(key, 0)})
     return series
+
+
+def _turnout_by_set(db: Session, election_id: str) -> list[dict]:
+    """Aggregate private turnout markers by alumni set.
+
+    This never returns a voter or a ballot identifier. The marker is written when a
+    ballot is accepted and is deliberately not linked to the anonymous ballot row.
+    """
+    rows = db.execute(
+        select(Voter.alumni_set, Voter.has_voted_at).where(
+            Voter.election_id == election_id,
+            Voter.is_eligible.is_(True),
+            Voter.register_status == "approved",
+        )
+    ).all()
+    sets: dict[str, dict[str, int]] = defaultdict(lambda: {"eligible": 0, "voted": 0})
+    for alumni_set, has_voted_at in rows:
+        key = alumni_set or "General"
+        sets[key]["eligible"] += 1
+        if has_voted_at is not None:
+            sets[key]["voted"] += 1
+
+    report = []
+    for key, values in sorted(sets.items()):
+        eligible = values["eligible"]
+        voted = values["voted"]
+        target = TURNOUT_TARGET_PER_SET
+        report.append({
+            "alumni_set": key,
+            "eligible": eligible,
+            "voted": voted,
+            "pending": max(eligible - voted, 0),
+            "target": target,
+            "target_remaining": max(target - voted, 0),
+            "target_met": voted >= target,
+            "progress_percentage": round(min(voted, target) / target * 100, 2),
+            "turnout_percentage": round(voted / eligible * 100, 2) if eligible else 0.0,
+        })
+    return report
 
 
 def _security_alerts(db: Session, election_id: str, limit: int = 10) -> list[dict]:
@@ -213,6 +257,9 @@ def overview(
         "election": election_summary(db, election),
         "status_label": STATUS_LABELS.get(election.status, election.status),
         "stats": stats,
+        "turnout_target_per_set": TURNOUT_TARGET_PER_SET,
+        "turnout_note": TURNOUT_NOTE,
+        "turnout_by_set": _turnout_by_set(db, election.id),
         "live": {
             "accreditations_last_hour": recent_accreditations,
             "failed_identity_checks": failed_identity,
@@ -272,26 +319,42 @@ def participation(
         .outerjoin(AccreditationRecord, AccreditationRecord.voter_row_id == Voter.id)
         .where(Voter.election_id == election.id, Voter.is_eligible.is_(True))
     ).all()
+    turnout = {row["alumni_set"]: row for row in _turnout_by_set(db, election.id)}
     sets: dict[str, dict[str, int]] = defaultdict(lambda: {"eligible": 0, "accredited": 0})
     for alumni_set, _voter_id, accreditation_id in rows:
         key = alumni_set or "General"
         sets[key]["eligible"] += 1
         if accreditation_id:
             sets[key]["accredited"] += 1
+    report = []
+    for key, values in sorted(sets.items()):
+        turnout_row = turnout.get(key, {})
+        voted = turnout_row.get("voted", 0)
+        target = TURNOUT_TARGET_PER_SET
+        eligible = values["eligible"]
+        report.append({
+            "alumni_set": key,
+            **values,
+            "voted": voted,
+            "pending": max(eligible - voted, 0),
+            "target": target,
+            "target_remaining": max(target - voted, 0),
+            "target_met": voted >= target,
+            "progress_percentage": round(min(voted, target) / target * 100, 2),
+            "participation_percentage": round(values["accredited"] / eligible * 100, 2)
+            if eligible else 0.0,
+            "turnout_percentage": round(voted / eligible * 100, 2) if eligible else 0.0,
+        })
     return {
+        "group_by": "alumni_set",
+        "target_per_set": TURNOUT_TARGET_PER_SET,
         "note": (
-            "Participation is measured from accreditation records. Ballots carry no voter identity, "
-            "so vote totals can never be attributed to an alumni set."
+            "Voted counts come from a private turnout marker recorded when a ballot is accepted. "
+            "The marker is not linked to the anonymous ballot or its selections, and this report "
+            "exposes aggregate counts only. Ballots cast before this report was enabled cannot be "
+            "attributed and are excluded."
         ),
-        "sets": [
-            {
-                "alumni_set": key,
-                **values,
-                "participation_percentage": round(values["accredited"] / values["eligible"] * 100, 2)
-                if values["eligible"] else 0.0,
-            }
-            for key, values in sorted(sets.items())
-        ],
+        "sets": report,
     }
 
 

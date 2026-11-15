@@ -119,6 +119,8 @@ def verify_voter(payload: VoterVerifyRequest, request: Request, db: Session = De
         db.flush()
 
     session_token = secrets.token_hex(32)
+    turnout_token = secrets.token_hex(32)
+    voter.turnout_token_hash = hashlib.sha256(turnout_token.encode()).hexdigest()
     db.add(AccreditationSession(
         election_id=election.id,
         voter_row_id=voter.id,
@@ -138,6 +140,7 @@ def verify_voter(payload: VoterVerifyRequest, request: Request, db: Session = De
     settings_row = get_settings_row(db, election.id)
     return {
         "accreditation_token": session_token,
+        "turnout_token": turnout_token,
         "expires_in": 20 * 60,
         "election_id": election.id,
         "election_reference": election.reference,

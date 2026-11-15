@@ -51,7 +51,12 @@ export default function AccreditPage() {
     setBusy(true);
     setError("");
     try {
-      const issued = await issueCredential(election.id, election.reference, session.accreditation_token);
+      const issued = await issueCredential(
+        election.id,
+        election.reference,
+        session.accreditation_token,
+        session.turnout_token
+      );
       storeCredential(election.id, issued);
       setCredential(issued);
       setStep("ready");

@@ -152,6 +152,9 @@ class BallotPrepare(BaseModel):
 class CredentialProof(BaseModel):
     token: str
     signature: str
+    # Required for casting (not challenging). Proves the voter's turnout marker without
+    # identifying which anonymous ballot was cast.
+    turnout_token: str | None = None
 
 
 class ExceptionalChange(BaseModel):

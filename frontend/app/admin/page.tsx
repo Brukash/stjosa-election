@@ -111,6 +111,61 @@ export default function AdminDashboardPage() {
           </div>
 
           <Card className="card-pad">
+            <SectionHeading eyebrow="Turnout progress" title="Voted and pending by alumni set">
+              Reporting target: {overview.turnout_target_per_set ?? 3} voters per set. Counts are aggregate only;
+              no voter or ballot is identified.
+            </SectionHeading>
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Alumni set</th>
+                    <th>Eligible</th>
+                    <th>Voted</th>
+                    <th>Pending</th>
+                    <th>Progress to target</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(overview.turnout_by_set ?? []).map((row: any) => (
+                    <tr key={row.alumni_set}>
+                      <td className="font-medium">{row.alumni_set}</td>
+                      <td>{row.eligible}</td>
+                      <td>{row.voted}</td>
+                      <td>{row.pending}</td>
+                      <td>
+                        <div className="flex items-center gap-3">
+                          <div className="h-2 w-24 overflow-hidden rounded-full bg-ink/10">
+                            <div
+                              className={`h-full rounded-full ${row.target_met ? "bg-green" : "bg-ink/40"}`}
+                              style={{ width: `${row.progress_percentage}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-ink/60">
+                            {row.voted} / {row.target}
+                            {row.target_met ? " · target met" : ` · ${row.target_remaining} to go`}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {(overview.turnout_by_set ?? []).length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="text-ink/50">
+                        No approved eligible voters are on the register.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-3 text-xs text-ink/45">
+              {overview.turnout_note ??
+                "Voted counts use a private turnout marker recorded when a ballot is accepted. Ballots cast before this report was enabled cannot be attributed and are excluded."}
+            </p>
+          </Card>
+
+          <Card className="card-pad">
             <SectionHeading eyebrow="Registration delivery" title="Email and WhatsApp notices">
               Successful sends and failures are recorded without message contents or full voter contact
               details.

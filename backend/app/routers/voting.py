@@ -25,6 +25,7 @@ from ..models import (
     ElectionVerificationSetting,
     PreparedBallot,
     SpentCredential,
+    Voter,
 )
 from ..receipts import receipt_payload
 from ..schemas import BallotPrepare, CredentialProof
@@ -254,6 +255,24 @@ def cast_ballot(
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid voting credential")
 
+    turnout_hash = token_hash(payload.turnout_token or "")
+    voter = db.execute(
+        select(Voter).where(
+            Voter.election_id == election.id,
+            Voter.turnout_token_hash == turnout_hash,
+        )
+    ).scalar_one_or_none()
+    if not voter:
+        record_audit(
+            db, action="ballot.cast", outcome="failure", election_id=election.id,
+            ip_address=client_ip(request), detail={"reason": "invalid_turnout_token"},
+        )
+        db.commit()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Turnout verification is missing or invalid. Verify your Voter ID again to vote.",
+        )
+
     digest = prepared.token_hash
     if db.execute(
         select(SpentCredential).where(
@@ -287,6 +306,8 @@ def cast_ballot(
         )
     )
     db.add(SpentCredential(election_id=election.id, token_hash=digest))
+    voter.has_voted_at = now()
+    voter.turnout_token_hash = None
     receipt = _issue_receipt(db, election, ballot, prepared)
 
     # Freeze configuration on the first accepted ballot (SRS §14.3).

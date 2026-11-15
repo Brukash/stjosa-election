@@ -30,6 +30,10 @@ Frontend: `NEXT_PUBLIC_API_URL=https://api.elections.your-domain.org`.
    - `supabase/migrations/0002_security.sql` — RLS, grants, append-only audit trigger, ballot
      immutability, receipt/commitment integrity check.
    - `supabase/migrations/0003_otp_channels.sql` — voter WhatsApp consent and delivery-channel history.
+   - `supabase/migrations/0004_registration_notifications.sql` — registration notice timestamps and
+     purpose tracking.
+   - `supabase/migrations/0005_voter_turnout.sql` — private turnout marker for aggregate progress
+     reporting.
 3. Confirm RLS is enabled on all sensitive tables (`Supabase → Database → Tables`).
 4. Create staff accounts through the application (or seed then change every password).
 5. Never expose the database connection string to the browser; the Next.js app talks only to FastAPI.

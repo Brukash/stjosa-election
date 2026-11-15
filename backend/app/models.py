@@ -154,6 +154,10 @@ class Voter(Base, TimestampMixin):
     imported_by: Mapped[str | None] = mapped_column(ForeignKey("profiles.id"))
     registration_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     registration_whatsapp_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Private turnout marker: records that this voter cast an accepted ballot, but is
+    # never linked to a ballot, receipt or selection. Used only for aggregate reporting.
+    turnout_token_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    has_voted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # ── Accreditation ────────────────────────────────────────────────────────────

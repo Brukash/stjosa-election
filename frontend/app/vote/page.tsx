@@ -107,7 +107,11 @@ export default function VotePage() {
     try {
       const data = await api(`/api/voting/${prepared.prepared_id}/cast`, {
         method: "POST",
-        body: JSON.stringify({ token: credential.token, signature: credential.signature }),
+        body: JSON.stringify({
+          token: credential.token,
+          signature: credential.signature,
+          turnout_token: credential.turnout_token,
+        }),
       });
       setReceipt(data);
       setPhase("cast");

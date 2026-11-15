@@ -31,10 +31,11 @@ the backend on every route, not by the interface.
 `POST /accreditation/verify-voter` body: `{ "election_id": "…", "voter_id": "…" }`. The backend
 matches the Voter ID against the approved electoral register and creates the short-lived
 accreditation session used by `POST /accreditation/credential`. A matching ID returns `200` with
-`accreditation_token`, `expires_in`, the voter summary and the election reference. An unknown,
-ineligible or unapproved Voter ID returns `404`. A Voter ID that already has an active credential
-returns `409`; the Accreditation Officer can reset that issuance through the audited exception route.
-No OTP is generated, sent or accepted during accreditation.
+`accreditation_token`, `turnout_token`, `expires_in`, the voter summary and the election reference. An
+unknown, ineligible or unapproved Voter ID returns `404`. A Voter ID that already has an active
+credential returns `409`; the Accreditation Officer can reset that issuance through the audited
+exception route. No OTP is generated, sent or accepted during accreditation. The browser stores the
+`turnout_token` with the anonymous credential and sends it only when casting.
 
 `POST /voting/prepare` body:
 
@@ -47,8 +48,10 @@ No OTP is generated, sent or accepted during accreditation.
 }
 ```
 
-`POST /voting/{id}/cast` body: `{ "token": "…", "signature": "…" }`. Repeating a cast for the same
-prepared ballot returns the same receipt (no duplicate ballot).
+`POST /voting/{id}/cast` body: `{ "token": "…", "signature": "…", "turnout_token": "…" }`.
+The turnout token is required and proves the voter's private turnout marker without storing a link
+to the anonymous ballot. It is written only after the ballot is accepted. Repeating a cast for the
+same prepared ballot returns the same receipt (no duplicate ballot).
 
 Challenge response `verification_material` contains: ciphertext, encrypted key, nonce, revealed data
 key, key commitment, ballot commitment and the revealed selections. The voter's browser checks that
@@ -124,7 +127,7 @@ accreditation_open`, `accreditation_open → voting_open`, `voting_open → voti
 | POST | `/results/{id}/approve` | `results.approve` |
 | POST | `/results/{id}/corrections` | `results.approve` + reason |
 | GET | `/monitoring/{id}/overview` | `monitor.view` |
-| GET | `/monitoring/{id}/participation` | `monitor.view` |
+| GET | `/monitoring/{id}/participation` | `monitor.view` (aggregate eligible/accredited/voted/pending by alumni set) |
 | GET | `/monitoring/{id}/audit-logs` | `audit.view` / `_technical`; `_limited` is filtered to Voter ID, credential and register events |
 | GET | `/monitoring/{id}/audit-report[.pdf\|.xlsx]` | `audit.view` or `audit.view_technical` |
 | GET | `/monitoring/{id}/results-status` | `monitor.view` |

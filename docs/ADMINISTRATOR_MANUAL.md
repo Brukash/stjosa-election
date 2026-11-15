@@ -63,8 +63,11 @@ lock time.
 ## 6. Monitor the election
 
 **Monitoring** shows eligible/accredited/votes/turnout, hourly ballot submissions, failed Voter ID
-checks, rejected duplicate attempts, security alerts, availability and verification lock state.
-Participation by alumni set is derived from accreditation records only — ballots carry no identity.
+checks, rejected duplicate attempts, security alerts, availability and verification lock state. The
+**Voted and pending by alumni set** report shows aggregate turnout against a three-voter target for
+each set. A private turnout marker records only that a voter has voted; it is never linked to the
+anonymous ballot or its selections, and the report never shows voter names. Ballots cast before this
+report is enabled have no marker and are therefore excluded from its voted counts.
 
 Candidate totals remain hidden until counting completes.
 

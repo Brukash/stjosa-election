@@ -8,7 +8,9 @@ Run:  .venv/Scripts/python.exe scripts/test_notifications.py
 from __future__ import annotations
 
 import json
+import math
 import os
+import secrets
 import sys
 import tempfile
 import threading
@@ -44,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 
+from app import crypto  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
@@ -291,6 +294,84 @@ def main() -> None:
         }
         assert overview.json()["live"]["failed_identity_checks"] >= 1
         ok("committee monitoring reports notice delivery and failed identity checks without secrets")
+
+        # ── 7. casting records turnout without linking it to the ballot ─────
+        numbers = crypto.credential_public_numbers()
+        modulus, exponent = int(numbers["n"], 16), int(numbers["e"], 16)
+        token_hex = secrets.token_hex(32)
+        message_hash = crypto.fdh(
+            crypto.credential_message(election["reference"], token_hex), modulus
+        )
+        while True:
+            blinding = secrets.randbelow(modulus - 2) + 2
+            if math.gcd(blinding, modulus) == 1:
+                break
+        blinded = (message_hash * pow(blinding, exponent, modulus)) % modulus
+        signed = client.post(
+            "/api/accreditation/credential",
+            json={
+                "accreditation_token": data["accreditation_token"],
+                "blinded_message": format(blinded, "x"),
+            },
+        )
+        assert signed.status_code == 200, signed.text
+        unblinded = (
+            int(signed.json()["blind_signature"], 16) * pow(blinding, -1, modulus)
+        ) % modulus
+        credential = {
+            "token": token_hex,
+            "signature": format(unblinded, "x"),
+            "turnout_token": data["turnout_token"],
+        }
+        selections = {
+            position["id"]: position["candidates"][0]["id"]
+            for position in election["positions"]
+        }
+        prepared_response = client.post(
+            "/api/voting/prepare",
+            json={"election_id": election_id, **credential, "selections": selections},
+        )
+        assert prepared_response.status_code == 200, prepared_response.text
+        prepared = prepared_response.json()
+
+        missing_turnout = client.post(
+            f"/api/voting/{prepared['prepared_id']}/cast",
+            json={"token": credential["token"], "signature": credential["signature"]},
+        )
+        assert missing_turnout.status_code == 401, missing_turnout.text
+        cast = client.post(
+            f"/api/voting/{prepared['prepared_id']}/cast", json=credential
+        )
+        assert cast.status_code == 200, cast.text
+
+        with SessionLocal() as db:
+            voted_voter = db.execute(
+                select(Voter).where(Voter.voter_id == "SJC/AL/2004/001")
+            ).scalar_one()
+            assert voted_voter.has_voted_at is not None
+            assert voted_voter.turnout_token_hash is None
+
+        report = client.get(
+            f"/api/monitoring/{election_id}/overview", headers=super_headers
+        )
+        assert report.status_code == 200, report.text
+        jos = next(
+            row for row in report.json()["turnout_by_set"]
+            if row["alumni_set"] == "Jos Chapter"
+        )
+        assert jos["voted"] == 1 and jos["pending"] == jos["eligible"] - 1, jos
+        assert jos["target"] == 3 and jos["target_remaining"] == 2, jos
+        participation = client.get(
+            f"/api/monitoring/{election_id}/participation", headers=observer_headers
+        )
+        assert participation.status_code == 200, participation.text
+        assert next(
+            row for row in participation.json()["sets"]
+            if row["alumni_set"] == "Jos Chapter"
+        )["voted"] == 1
+        assert "Emeka Nwosu" not in report.text
+        assert "SJC/AL/2004/001" not in report.text
+        ok("a cast records a private turnout marker and the dashboard reports aggregate progress")
 
     server.shutdown()
     print("\n" + "=" * 72)
