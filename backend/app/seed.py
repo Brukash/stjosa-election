@@ -158,7 +158,7 @@ def seed_database(db: Session) -> dict:
         status="draft",
         eligibility_rules=(
             "Only alumni whose records appear on the approved electoral register published by the "
-            "Electoral Committee may vote. Voter ID and OTP verification are mandatory."
+            "Electoral Committee may vote. A Voter ID on the approved register is required."
         ),
         voting_rules=(
             "One ballot per accredited voter. One candidate per position. Selections may not be "

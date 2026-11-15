@@ -53,7 +53,7 @@ Cannot:
 **Duty:** voter roll and accreditation support.
 
 Can:
-- Import the register, review accreditation and OTP records, reset a failed issuance.
+- Import the register, review accreditation and Voter ID verification records, reset a failed issuance.
 - Monitor participation, commitments and limited audit records.
 - Use **Admin → Accreditation** to search accredited voters, see each voter's credential status
   (active / revoked / not issued) and revoke a lost credential with a recorded reason. The old
@@ -104,7 +104,7 @@ Read boundaries are enforced with dedicated permissions, not just hidden menus:
 - `tally.view` — tally runs and count proofs: Chairman and Returning Officer only.
 - `results.review` — full provisional/approval view; `results.review_restricted` (Observer) returns
   signed declarations only, with provisional counts and approval comments removed.
-- `audit.view_limited` — Accreditation Officer sees only OTP, credential and register audit events;
+- `audit.view_limited` — Accreditation Officer sees only Voter ID, credential and register audit events;
   full audit logs and reports require `audit.view` or `audit.view_technical`.
 
 ## Account administration

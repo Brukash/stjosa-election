@@ -217,11 +217,10 @@ def provider_status() -> list[dict]:
                 "WHATSAPP_PROVIDER=meta",
                 "WHATSAPP_ACCESS_TOKEN",
                 "WHATSAPP_PHONE_NUMBER_ID",
-                "WHATSAPP_TEMPLATE_NAME",
                 "WHATSAPP_REGISTRATION_TEMPLATE_NAME",
             ],
-            "template": settings.whatsapp_template_name,
-            "template_language": settings.whatsapp_template_language,
+            "template": settings.whatsapp_registration_template_name,
+            "template_language": settings.whatsapp_registration_template_language,
             "registration_template": settings.whatsapp_registration_template_name,
             "registration_template_language": settings.whatsapp_registration_template_language,
             "registration_configured": settings.whatsapp_registration_configured,
@@ -465,14 +464,14 @@ def _send_whatsapp(destination: str, otp: str) -> tuple[str | None, str | None]:
 # ── registration notices ─────────────────────────────────────────────────────
 def _registration_email_body(election: Election, voter: Voter) -> tuple[str, str, str]:
     link = f"{settings.app_origin.rstrip('/')}/accredit"
-    subject = f"{election.reference}: You are registered to vote"
+    subject = f"{election.reference}: You are registered to vote — Voter ID {voter.voter_id}"
     text = (
         f"Dear {voter.full_name},\n\n"
         f"You have been approved on the electoral register for {election.title}.\n"
         f"Your Voter ID is {voter.voter_id}.\n\n"
-        f"To accredit, open {link} and enter your Voter ID. You will receive a one-time "
-        f"password before you can receive your voting credential.\n\n"
-        f"Do not share your OTP with anyone. Officials will never ask you for it.\n\n"
+        f"To accredit, open {link} and enter your Voter ID. If it matches the approved "
+        f"register, you can create your anonymous voting credential and vote.\n\n"
+        f"Keep this email and your Voter ID private. Officials will never ask for your voting credential.\n\n"
         f"St. John's College Jos Alumni Election"
     )
     html_body = f"""<!doctype html><html><body style="margin:0;background:#F4F6F2;font-family:Arial,sans-serif;color:#1E2A22">
@@ -484,9 +483,9 @@ def _registration_email_body(election: Election, voter: Voter) -> tuple[str, str
 <p style="margin:0 0 12px;font-size:15px">Dear {html.escape(voter.full_name)},</p>
 <p style="margin:0 0 12px;font-size:14px;line-height:1.6">You have been approved on the electoral register for <strong>{html.escape(election.title)}</strong>.</p>
 <p style="margin:0 0 18px;font-size:14px">Your Voter ID is <strong style="font-family:Consolas,monospace">{html.escape(voter.voter_id)}</strong>.</p>
-<p style="margin:0 0 18px;font-size:14px;line-height:1.6">To accredit, open the accreditation page and enter your Voter ID. You will receive a one-time password before you can receive your voting credential.</p>
+<p style="margin:0 0 18px;font-size:14px;line-height:1.6">To accredit, open the accreditation page and enter your Voter ID. If it matches the approved register, you can create your anonymous voting credential and vote.</p>
 <p style="margin:0 0 18px"><a href="{html.escape(link)}" style="display:inline-block;background:#0F3D2E;color:#fff;text-decoration:none;padding:11px 18px;border-radius:7px;font-size:14px;font-weight:600">Open accreditation</a></p>
-<p style="margin:0;font-size:13px;color:#55635A">Never share your OTP with anyone. Officials will never ask you for it.</p>
+<p style="margin:0;font-size:13px;color:#55635A">Keep this email and your Voter ID private. Officials will never ask for your voting credential.</p>
 </td></tr>
 <tr><td style="background:#EEF4EC;padding:16px 26px;font-size:11px;color:#55635A">This message never asks for your ballot choices.</td></tr>
 </table></td></tr></table></body></html>"""

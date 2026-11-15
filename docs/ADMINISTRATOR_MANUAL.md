@@ -50,7 +50,7 @@ candidates and verification settings.
 
 ## 5. Open the election
 
-1. **Open accreditation** (Chairman): voters can now receive OTPs and credentials.
+1. **Open accreditation** (Chairman): voters can now verify their Voter ID and receive credentials.
 2. **Open voting** (Chairman): the ballot becomes available.
 3. **Close voting** can be performed by the Chairman or Returning Officer; voting also closes
    automatically at the configured closing time.
@@ -62,8 +62,8 @@ lock time.
 
 ## 6. Monitor the election
 
-**Monitoring** shows eligible/accredited/votes/turnout, hourly ballot submissions, failed OTP
-attempts, rejected duplicate attempts, security alerts, availability and verification lock state.
+**Monitoring** shows eligible/accredited/votes/turnout, hourly ballot submissions, failed Voter ID
+checks, rejected duplicate attempts, security alerts, availability and verification lock state.
 Participation by alumni set is derived from accreditation records only — ballots carry no identity.
 
 Candidate totals remain hidden until counting completes.

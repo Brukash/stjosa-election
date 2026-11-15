@@ -8,8 +8,8 @@ import { api, formatDate } from "@/lib/api";
 
 const FEATURES = [
   {
-    title: "Accreditation with Voter ID and OTP",
-    body: "Only alumni on the approved electoral register receive a one-time password, and only one anonymous credential is issued per voter.",
+    title: "Accreditation with your Voter ID",
+    body: "Only alumni on the approved electoral register can accredit. Your Voter ID is checked against the register, and only one anonymous credential is issued per voter.",
   },
   {
     title: "Encrypted anonymous ballots",
@@ -72,8 +72,7 @@ export default function HomePage() {
             </Link>
           </div>
           <p className="mt-4 text-xs text-ink/45">
-            You will need the Voter ID issued by the Electoral Committee and access to your registered
-            email or phone number.
+            You will need the Voter ID sent to the email address on your approved registration.
           </p>
         </div>
 
@@ -139,7 +138,7 @@ export default function HomePage() {
           <h3 className="font-display text-lg text-ink">How voting works</h3>
           <ol className="mt-4 grid gap-3 sm:grid-cols-2">
             {[
-              ["1", "Verify your identity", "Enter your Voter ID and the OTP sent to your registered contact."],
+              ["1", "Verify your identity", "Enter your Voter ID. We check it against the approved register; no OTP is required."],
               ["2", "Receive your anonymous credential", "Your browser blinds a secret token; the system signs it without seeing it."],
               ["3", "Review and verify your ballot", "Check your selections, optionally challenge the encryption, then cast."],
               ["4", "Keep your receipt and verify", "Use the receipt reference or QR code to confirm inclusion any time."],

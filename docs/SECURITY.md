@@ -40,30 +40,27 @@ decides. On challenge:
 The protocol never produces a transferable proof of the voter's final cast ballot, which limits
 coercion and vote-buying risk.
 
-### 1.3a OTP delivery
+### 1.3a Voter ID verification and registration notices
 
-- After one Voter ID submission, the backend generates one OTP and sends that same value
-  simultaneously by email (Resend HTTP API, or SMTP), Termii SMS and the official Meta WhatsApp
-  Business Platform. The browser cannot select a channel or choose/change a destination; every
-  destination comes from the approved register. WhatsApp is skipped without `whatsapp_consent`
-  while email and SMS continue.
-- OTPs are six digits, stored only as HMAC-SHA256 digests, expire after five minutes, allow five
-  incorrect attempts, and are rate-limited per voter/hour with a resend cooldown. One challenge and
-  one digest cover all channels; verification through any channel consumes it everywhere. A resend
-  expires the previous challenge, so only one challenge can be active.
-- Delivery records store a masked recipient, provider message id, status and a truncated failure
-  reason — never the code or the full address. Meta status callbacks are HMAC-verified and contain no
-  OTP.
-- On-screen delivery exists only for local development: `ENVIRONMENT=development`, a loopback
-  `APP_ORIGIN` and `DEV_EXPOSE_OTP=true` are all required. Production/staging or a public origin
-  disables it regardless of the flag.
-- With no channel configured outside development, OTP issuance returns `503` rather than exposing a
-  code. Provider calls run concurrently and failures are isolated; a partial failure still returns
-  the confirmed channels and the voter can use whichever message arrives. Only when every attempted
-  provider fails does the API return `502` and expire the challenge. A complete failure can be
-  retried immediately without a cooldown dead end.
-- Committee monitoring reports requests, successful/failed deliveries and channel usage without OTPs
-  or full contact data. Provider credentials are read only from server-side configuration.
+- Accreditation is Voter ID-only. The backend matches the submitted Voter ID against an eligible,
+  approved record in the election's register, creates one accreditation record and returns a
+  short-lived session token used to request the blind credential signature. No OTP is generated,
+  delivered or accepted.
+- The Voter ID is sent to the member's registered email when the Chairman approves the register. The
+  email also carries the full name, election title and accreditation link. The Voter ID must therefore
+  be treated as a bearer credential: it should be issued privately and the registration email should
+  not be forwarded.
+- A Voter ID can have only one active credential issuance per election. The credential route rejects a
+  second active issuance; a lost credential requires an audited Accreditation Officer reset.
+- Registration notices are sent by email and WhatsApp after approval. Email requires an address on the
+  register. WhatsApp requires recorded `whatsapp_consent` and an approved Meta **Utility** template
+  whose parameters are voter name, election title and Voter ID. The authentication/OTP template is not
+  used.
+- Successful channels are timestamped per voter. Repeated approval retries only channels that have not
+  succeeded, and delivery rows record a masked recipient, provider message id, status and a truncated
+  failure reason — never full contact details or message contents.
+- Committee monitoring reports registration-notice delivery, failed Voter ID checks and provider
+  readiness without exposing credentials or full contact data.
 
 ### 1.4 Published commitments and tally
 
@@ -96,9 +93,9 @@ coercion and vote-buying risk.
 
 | Threat | Mitigation |
 | --- | --- |
-| Ineligible person votes | Approved register + OTP + one credential per Voter ID |
+| Ineligible person votes | Approved register, eligible Voter ID and one credential per Voter ID |
 | Double voting | Unique spent-credential constraint; idempotent cast retries return the original receipt |
-| Credential theft | Single-use credential, OTP-bound issuance, audited revocation |
+| Credential theft | Single-use credential, Voter ID-bound issuance, audited revocation |
 | Ballot substitution | Cast-as-intended challenge with browser-side verification |
 | Vote buying / coercion | No transferable proof of final selections; receipt contains commitment only |
 | Admin reads votes | Ballot ciphertext only; tally key outside database, dual-control use |
@@ -108,7 +105,7 @@ coercion and vote-buying risk.
 | Replay / duplicate submissions | Prepared-ballot binding to credential hash + unique spent credential |
 | Verification disabled mid-election | Settings locked on first ballot and at closure |
 | Audit tampering | Append-only table plus database trigger |
-| OTP brute force | 5 attempts, 5-minute expiry, 60-second resend, 10 requests/hour |
+| Voter ID guessing or sharing | Register-only lookup, audited failures, one active credential per Voter ID |
 
 ## 4. Test evidence
 
@@ -140,26 +137,21 @@ properties. Last run against the delivered code: **all checks passed**.
 21. Audit report passes all 8 automated checks; PDF and Excel exports valid
 22. Second election configured and approved through the two-person flow
 
-Additionally exercised in a real browser (Chromium): OTP accreditation, in-browser credential
+Additionally exercised in a real browser (Chromium): Voter ID accreditation, in-browser credential
 blinding/unblinding and verification, ballot selection, challenge verification (all four browser
 checks passed), casting, and receipt issuance.
 
-`backend/scripts/test_otp_delivery.py` exercises real provider HTTP payloads against local mock
-providers (no credentials required). Last run: **14/14 passed**.
+`backend/scripts/test_notifications.py` exercises direct Voter ID accreditation and real provider HTTP
+payloads against local mock providers (no credentials required). Last run: **8/8 passed**.
 
-1. One request sends one identical OTP through Resend, Termii and Meta WhatsApp
-2. The same OTP verifies through the SMS copy and completes accreditation
-3. Successful verification invalidates the OTP across all channels; duplicate accreditation rejected
-4. A failed email provider does not cancel Termii and WhatsApp delivery
-5. All-provider failure returns 502, records failures and leaves no usable OTP
-6. Five incorrect OTP attempts lock the shared challenge
-7. Expired OTP rejection
-8. Resend cooldown enforced; resend invalidates the previous OTP
-9. WhatsApp without consent is reported unavailable without stopping Email or SMS
-10. Contact records inaccessible without register permission
-11. Committee monitoring exposes channel counts/provider readiness without secrets
-12. Production without a provider fails closed
-13. Local on-screen delivery only when enabled; on-screen OTP refused outside local development
+1. A matching Voter ID creates an accreditation session with no OTP delivery
+2. The retired OTP accreditation routes return 404
+3. An unknown Voter ID is rejected against the approved register
+4. Approval emails the member's Voter ID and sends the approved WhatsApp utility notice
+5. Notice deliveries are recorded separately per channel and voter
+6. Repeated register approval does not resend successful notices
+7. Voter contact records remain inaccessible without register permission
+8. Monitoring reports notice delivery and failed identity checks without secrets
 
 Also checked manually: authorization failures return 403, invalid credentials 401, locked
 configuration 409, and no ballot table row contains a voter identifier.
@@ -168,15 +160,14 @@ configuration 409, and no ballot table row contains a voter identifier.
 
 1. **Independent cryptographic review** of the blind signature and challenge protocol (SRS §12.4) has
    not been performed. Do not run a real election without it.
-2. **OTP deliverability**: Email, SMS and Meta WhatsApp are integrated against mock providers, but
-   the committee must verify its Resend sender domain (SPF/DKIM/DMARC), Termii sender ID for Nigeria,
-   approved WhatsApp authentication template, webhook secret and recorded voter consent, then run
-   simultaneous live test messages with `ENVIRONMENT=production`. No provider credentials are
-   committed.
+2. **Registration-notice deliverability**: Email and Meta WhatsApp are integrated against mock
+   providers, but the committee must verify its Resend sender domain (SPF/DKIM/DMARC), approved
+   WhatsApp utility template, webhook secret and recorded voter consent, then run live test messages
+   with `ENVIRONMENT=production`. No provider credentials are committed.
 3. **Key management**: file-based tally keys with a software master key. Use an HSM/KMS with
    dual-control release, documented rotation and split-knowledge custody.
 4. **Load and availability testing** at 2,500 voters / 500 concurrent users has not been performed.
-5. **Penetration testing** (authentication, API, injection, XSS, OTP abuse, credential reuse, database
+5. **Penetration testing** (authentication, API, injection, XSS, Voter ID abuse, credential reuse, database
    access control) is pending independent execution.
 6. **Session storage**: staff JWT is in `localStorage`. Production should use `HttpOnly` cookies, CSRF
    tokens and short session lifetimes with refresh.
@@ -190,7 +181,7 @@ configuration 409, and no ballot table row contains a voter identifier.
 | # | Criterion | Status |
 | --- | --- | --- |
 | 1 | Only eligible voters obtain credentials | Implemented, tested |
-| 2 | OTP verification works | Implemented, tested |
+| 2 | Voter ID verification works | Implemented, tested |
 | 3 | No multiple credentials | Implemented (one active issuance; audited exception), tested indirectly |
 | 4 | Credential single use | Implemented, tested |
 | 5 | Selections encrypted | Implemented, tested |

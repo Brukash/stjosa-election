@@ -12,8 +12,8 @@ Association, built to the SRS v1.1 baseline.
 
 ## What is implemented
 
-- **Voter accreditation** — Voter ID + OTP (5-minute expiry, attempt limits, resend cool-down,
-  request rate limiting, hashed OTP storage), one credential issuance per voter per election,
+- **Voter accreditation** — Voter ID checked against the approved register, one credential issuance
+  per voter per election,
   audited exception handling.
 - **Anonymous credentials** — The browser blinds a secret token, the accreditation service signs it,
   and the voter unblinds locally. The service never sees the credential and cannot link it to a
@@ -29,7 +29,7 @@ Association, built to the SRS v1.1 baseline.
   per-ballot inclusion proofs and downloadable manifests.
 - **Verification portal** — Receipt lookup returning acceptance, publication, Merkle proof, signature
   validity and inclusion in the count; never reveals identity or selections.
-- **Monitoring dashboard** — Turnout, accreditation, OTP failures, rejected duplicates, hourly
+- **Monitoring dashboard** — Turnout, accreditation, failed identity checks, rejected duplicates, hourly
   activity, security alerts, availability, counting and results status.
 - **Counting** — Requires dual authorisation (Chairman + Returning Officer); decrypts under the
   tally key, validates ballots, aggregates per position, writes per-ballot proofs, a hash-chained
@@ -55,7 +55,8 @@ frontend/
   components/
 supabase/
   migrations/     0001_init.sql (schema), 0002_security.sql (RLS, audit protection),
-                  0003_otp_channels.sql (WhatsApp consent and channel index)
+                  0003_otp_channels.sql (WhatsApp consent history),
+                  0004_registration_notifications.sql (per-channel notice timestamps)
 docs/             API reference, admin manual, voter guide, security report, operations
 ```
 
@@ -68,7 +69,7 @@ cd backend
 python -m venv .venv
 .venv/Scripts/activate          # Windows (source .venv/bin/activate on Unix)
 pip install -r requirements.txt
-cp .env.example .env            # change SECRET_KEY, MASTER_KEY and OTP_HASH_PEPPER
+cp .env.example .env            # change SECRET_KEY and MASTER_KEY
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -98,71 +99,44 @@ Password for all seeded accounts: `ChangeMe!2026` (override with `SEED_DEFAULT_P
 | Returning Officer | `returning@sjcjos-alumni.org` |
 | Election Observer | `observer@sjcjos-alumni.org` |
 
-Demo Voter IDs: `SJC/AL/2004/001` … `SJC/AL/2015/024`. In local development with no provider
-configured the OTP is shown on the accreditation screen and returned as `dev_otp`; that is only
-possible when `ENVIRONMENT=development`, `APP_ORIGIN` is a loopback address and `DEV_EXPOSE_OTP=true`.
+Demo Voter IDs: `SJC/AL/2004/001` … `SJC/AL/2015/024`. Accreditation checks the Voter ID directly
+against the approved register; no OTP is involved. Registration notices are sent by email and
+WhatsApp when the register is approved.
 
-### 4. Simultaneous OTP delivery (email, SMS and WhatsApp)
+### 4. Registration notices (email and WhatsApp)
 
-After one Voter ID submission, the backend validates the approved register and generates **one**
-cryptographically secure six-digit OTP. It sends that same OTP concurrently through Resend email,
-Termii SMS and the official Meta WhatsApp Business API. The voter does not choose a channel; they
-enter whichever registered message arrives first. The destination always comes from the approved
-register, so the browser cannot supply or change an email address or phone number.
+Accreditation is **Voter ID-only**. A voter enters the Voter ID from the approved register; if it
+matches, the system opens an accreditation session and the browser creates the anonymous credential.
+No OTP is generated or delivered during accreditation.
 
-`POST /api/accreditation/otp-options` remains available as a read-only diagnostic view of masked
-destinations. The accreditation screen calls `POST /api/accreditation/request-otp` directly.
+When the Chairman approves the register, every eligible voter receives a registration notice:
+
+- **Email** includes the voter's full name, **Voter ID**, election title and a link to the
+  accreditation page. The subject line also includes the Voter ID. An address on the register is
+  required.
+- **WhatsApp** uses the separate approved **Utility** template `sjc_registration_confirmation` with
+  three body parameters: `{{1}}` voter name, `{{2}}` election title and `{{3}}` Voter ID. Recorded
+  `whatsapp_consent` is required. The OTP authentication template is not used.
 
 | Channel | Provider | Required settings |
 | --- | --- | --- |
 | Email | Resend | `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM` (verified domain) |
 | Email | Any SMTP relay | `EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` |
-| SMS | Termii | `SMS_PROVIDER=termii`, `TERMII_API_KEY`, `TERMII_SENDER_ID`, `TERMII_CHANNEL=dnd` |
-| WhatsApp | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, approved authentication `WHATSAPP_TEMPLATE_NAME`, `WHATSAPP_TEMPLATE_LANGUAGE` |
-| WhatsApp registration notices | Meta | separate approved **utility** `WHATSAPP_REGISTRATION_TEMPLATE_NAME`, `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE` |
+| WhatsApp registration notices | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_REGISTRATION_TEMPLATE_NAME`, `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE` |
 | WhatsApp status webhook | Meta | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` |
 
-Twilio remains only as a legacy SMS fallback (`SMS_PROVIDER=twilio`); new deployments should use
-Termii's transactional `dnd` channel. WhatsApp requires a recorded `whatsapp_consent` opt-in and an
-approved Meta authentication template; it never uses a personal account or browser automation.
+Successful channels are timestamped on the voter (`registration_email_sent_at`,
+`registration_whatsapp_sent_at`). Approving the register again retries only channels that have not
+succeeded, so repeated approval does not spam members. Approval is committed before notifications,
+and a provider failure never cancels the approval or the other channel. Delivery attempts are recorded
+in `notification_deliveries` with `purpose="registration"`; message contents and full contacts are not
+stored.
 
-When the Chairman approves the register, each eligible voter is also sent a registration notice by
-email and WhatsApp. Email requires a registered address; WhatsApp requires consent, a mobile number
-and a separate approved **utility** template (`sjc_registration_confirmation` by default, with three
-body parameters: voter name, election title and Voter ID). WhatsApp authentication templates must not
-be used for these notices. Each channel is recorded independently, so a repeated approval does not
-resend a notice that already succeeded, while a failed or unavailable channel can be retried by
-approving again. Approval itself succeeds even when a notification provider fails.
-
-Behaviour:
-
-- One challenge and one hashed OTP cover all channels. Verification through any channel consumes the
-  same challenge, invalidates the code everywhere and creates at most one accreditation record.
-- Delivery attempts run concurrently and are isolated: a failed Resend call does not cancel Termii or
-  Meta. The response lists every channel with its masked destination and a confirmed status
-  (`sent`, `failed`, `unavailable` or local-development `skipped`).
-- Delivery succeeds only if at least one provider returns a confirmation identifier. If every
-  attempted provider fails, the API returns `502`, expires the challenge immediately and exposes no
-  usable OTP. If no registered channel/provider is available, it returns `503` before generating a
-  challenge.
-- The same six-digit value is sent to every available channel, but it is never returned by the API,
-  written to logs or stored in plain text. Delivery rows store only a masked recipient, provider
-  message id, status and a truncated failure reason. Meta callbacks are HMAC-verified and contain no
-  OTP.
-- OTPs expire after five minutes, allow five incorrect attempts, and are stored only as HMAC digests.
-  A resend invalidates the previous active challenge and is subject to the per-voter cooldown and
-  hourly cap.
-- `dev_otp` is returned **only** when `ENVIRONMENT=development` **and** `APP_ORIGIN` is loopback
-  **and** `DEV_EXPOSE_OTP=true`. `ENVIRONMENT=production` or any non-local origin disables it
-  regardless of the flag.
-- The monitoring dashboard and Super Administrator delivery page show requests, successful and failed
-  deliveries by channel and provider readiness. Administrators never see OTP values or full contacts.
-
-Run the delivery tests without real credentials (uses a local mock provider):
+Run the delivery and accreditation tests without real credentials:
 
 ```bash
 cd backend
-.venv/Scripts/python.exe scripts/test_otp_delivery.py
+.venv/Scripts/python.exe scripts/test_notifications.py
 ```
 
 ### 5. Mock election test
@@ -180,11 +154,11 @@ second election through the two-person configuration flow. Run it against a fres
 ## Supabase deployment
 
 1. Create a Supabase project.
-2. Apply `supabase/migrations/0001_init.sql`, `0002_security.sql` and
-   `0003_otp_channels.sql` (SQL editor or `supabase db push`).
+2. Apply `supabase/migrations/0001_init.sql`, `0002_security.sql`, `0003_otp_channels.sql` and
+   `0004_registration_notifications.sql` (SQL editor or `supabase db push`).
 3. Set `DATABASE_URL` to the Supabase connection string (the backend rewrites `postgres://` /
    `postgresql://` to the `psycopg` driver).
-4. Set strong `SECRET_KEY`, `MASTER_KEY`, `OTP_HASH_PEPPER` and `SEED_DEFAULT_PASSWORD` values.
+4. Set strong `SECRET_KEY`, `MASTER_KEY` and `SEED_DEFAULT_PASSWORD` values.
 5. Run the backend with `DEMO_SEED=false` for production and create staff accounts deliberately.
 
 Detailed steps, backup/recovery and election-day procedures: `docs/OPERATIONS.md`.
@@ -203,11 +177,12 @@ Detailed steps, backup/recovery and election-day procedures: `docs/OPERATIONS.md
 
 ### Known limitations (read before production)
 
-- OTP delivery is implemented (Resend/SMTP email, Termii SMS and Meta WhatsApp), but must be
-  configured with the committee's verified sender domain, Termii sender ID, approved WhatsApp
-  authentication template and recorded voter consent, then tested for deliverability before a real
-  election. In production the on-screen OTP is disabled automatically; no provider credential is
-  committed.
+- Registration notices are implemented by email (Resend/SMTP) and WhatsApp (Meta utility template),
+  but must be configured with the committee's verified sender domain, approved WhatsApp template and
+  recorded voter consent, then tested for deliverability before a real election. No provider
+  credential is committed.
+- Accreditation is Voter ID-only. The Voter ID is sent by email and therefore acts as a bearer
+  credential: it must be issued privately, and members must not forward their registration email.
 - The blind-signature construction is textbook RSA-FDH on a 2048-bit key. It must be reviewed by an
   independent cryptographer (SRS §12.4) before production; key rotation and HSM-backed key custody
   are not implemented.

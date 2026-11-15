@@ -45,8 +45,7 @@ def main() -> int:
     print(f"app origin:        {settings.app_origin}")
     print(f"api origin:        {settings.api_origin}")
     print(f"database:          {'postgresql' if 'postgresql' in settings.database_url else settings.database_url.split(':')[0]}")
-    print(f"OTP delivery:      {settings.delivery_mode}")
-    print(f"on-screen OTP:     {'enabled' if settings.expose_dev_otp else 'disabled'}")
+    print(f"notification mode: {settings.delivery_mode}")
     print(f"keys directory:    {settings.keys_dir} ({'writable' if settings.keys_dir.exists() else 'MISSING'})")
     print(f"production issues: {len(settings.production_issues)}")
     for issue in settings.production_issues:

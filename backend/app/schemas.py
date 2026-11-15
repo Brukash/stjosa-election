@@ -132,20 +132,9 @@ class EligibilityUpdate(BaseModel):
     note: str | None = None
 
 
-class OtpOptionsRequest(BaseModel):
+class VoterVerifyRequest(BaseModel):
     election_id: str | None = None
     voter_id: str
-
-
-class OtpRequest(OtpOptionsRequest):
-    """The voter supplies only the election and Voter ID; delivery is automatic."""
-
-
-class OtpVerify(BaseModel):
-    election_id: str | None = None
-    voter_id: str
-    challenge_id: str
-    otp: str
 
 
 class CredentialRequest(BaseModel):

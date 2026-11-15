@@ -33,7 +33,6 @@ from .models import (
     ElectionConfigurationApproval,
     ElectionPosition,
     ElectionVerificationSetting,
-    OtpChallenge,
     PublishedCommitmentBatch,
     ResultApproval,
     ResultDeclaration,
@@ -64,9 +63,10 @@ def audit_report(db: Session, election: Election) -> dict:
         .join(Voter, Voter.id == AccreditationRecord.voter_row_id)
         .where(AccreditationRecord.election_id == election.id, Voter.is_eligible.is_(False))
     ) or 0
-    otp_total = _count(db, OtpChallenge, OtpChallenge.election_id == election.id)
-    otp_failed = _count(db, AuditLog, AuditLog.election_id == election.id,
-                        AuditLog.action == "otp.verify", AuditLog.outcome == "failure")
+    identity_checks = _count(db, AuditLog, AuditLog.election_id == election.id,
+                             AuditLog.action == "voter.verify", AuditLog.outcome == "success")
+    failed_identity = _count(db, AuditLog, AuditLog.election_id == election.id,
+                             AuditLog.action == "voter.verify", AuditLog.outcome == "failure")
     issuances = _count(db, CredentialIssuance, CredentialIssuance.election_id == election.id,
                        CredentialIssuance.status == "issued")
     accepted = _count(db, Ballot, Ballot.election_id == election.id, Ballot.accepted.is_(True))
@@ -161,7 +161,7 @@ def audit_report(db: Session, election: Election) -> dict:
         "areas": {
             "accreditation": {"registered_voters": registered, "eligible_voters": eligible,
                               "accredited_voters": accredited, "ineligible_accreditations": accredited_ineligible},
-            "authentication": {"otp_challenges": otp_total, "failed_otp_attempts": otp_failed},
+            "identity_verification": {"verified": identity_checks, "failed_attempts": failed_identity},
             "credential_issuance": {"issued": issuances, "spent": spent},
             "voting": {"accepted_ballots": accepted},
             "verification": {"challenged_ballots": challenged},

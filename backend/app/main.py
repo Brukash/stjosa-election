@@ -109,7 +109,7 @@ app = FastAPI(
     title=settings.app_name,
     version="1.1.0",
     description=(
-        "End-to-end verifiable remote electronic voting: voter ID + OTP accreditation, blind-signature "
+        "End-to-end verifiable remote electronic voting: Voter ID accreditation, blind-signature "
         "anonymous credentials, encrypted ballots, cast-as-intended verification, signed anonymous "
         "commitment lists, verifiable counting and audited results declaration."
     ),

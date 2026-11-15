@@ -4,16 +4,17 @@
 
 You need:
 
-- Your **Voter ID** from the Electoral Committee register (for example `SJC/AL/2004/001`).
-- Access to the email address or phone number registered with the Alumni Association.
+- Your **Voter ID** from the Electoral Committee register (for example `SJC/AL/2004/001`). The
+  registration email sent when your entry was approved contains this ID.
 - About five minutes.
 
 ## 1. Accredit
 
 1. Open the election website and choose **Accredit and vote**.
-2. Enter your Voter ID exactly as printed on the register.
-3. A one-time password (OTP) is sent to your registered contact. It expires in five minutes.
-4. Enter the OTP. If it expires or you run out of attempts, request a new one.
+2. Enter the Voter ID sent to your registered email.
+3. The system checks it against the approved register. If it matches, you can proceed directly —
+   no OTP is required.
+4. Create your anonymous voting credential and open your ballot.
 
 One credential is issued per Voter ID. If you lose it, contact the Accreditation Officer — the
 replacement is controlled and recorded.
@@ -68,7 +69,8 @@ It never reveals who you are or how you voted.
 
 - The receipt proves acceptance only; it is not proof of how you voted, and it cannot be used to
   demonstrate your choices to anyone else.
-- Do not share your OTP or credential with anyone. Officials will never ask for them.
+- Keep your Voter ID and the registration email private. Officials will never ask for your voting
+  credential.
 - If someone tries to buy or coerce your vote, report it to the Electoral Committee. The system
   deliberately cannot produce a transferable proof of your selections.
 
@@ -76,8 +78,7 @@ It never reveals who you are or how you voted.
 
 | Problem | Action |
 | --- | --- |
-| OTP not received | Check the registered email/phone; wait for the cool-down, then request again |
-| OTP expired | Request a new OTP |
+| Voter ID not recognised | Check the ID in your registration email and enter it exactly; contact the Electoral Committee if it still fails |
 | "Credential already issued" | Contact the Accreditation Officer for a controlled exception |
 | "Voting is not open" | Check the election dates shown on the site |
 | Credential lost / tab closed | Re-accredit; if blocked, contact the Accreditation Officer |

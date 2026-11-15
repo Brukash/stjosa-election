@@ -24,7 +24,6 @@ from ..models import (
     ElectionConfigurationApproval,
     ElectionVerificationSetting,
     NotificationDelivery,
-    OtpChallenge,
     Profile,
     ResultDeclaration,
     TallyRun,
@@ -41,7 +40,7 @@ router = APIRouter(prefix="/monitoring", tags=["monitoring"])
 
 # The Accreditation Officer's limited audit view covers the parts of the process they work in.
 LIMITED_AUDIT_ACTIONS = (
-    "otp.request", "otp.deliver", "otp.verify",
+    "voter.verify", "otp.request", "otp.deliver", "otp.verify",
     "credential.issued", "credential.revoked",
     "register.import", "register.voter_added", "register.eligibility", "register.consent",
     "register.approve",
@@ -138,9 +137,9 @@ def overview(
             AccreditationRecord.accredited_at >= now() - timedelta(hours=1),
         )
     ) or 0
-    failed_otp = db.scalar(
+    failed_identity = db.scalar(
         select(func.count(AuditLog.id)).where(
-            AuditLog.election_id == election.id, AuditLog.action == "otp.verify",
+            AuditLog.election_id == election.id, AuditLog.action == "voter.verify",
             AuditLog.outcome == "failure",
         )
     ) or 0
@@ -150,22 +149,25 @@ def overview(
             AuditLog.outcome == "failure",
         )
     ) or 0
-    otp_sent = db.scalar(
+    notice_sent = db.scalar(
         select(func.count(NotificationDelivery.id)).where(
             NotificationDelivery.election_id == election.id,
-            NotificationDelivery.purpose == "otp",
+            NotificationDelivery.purpose == "registration",
             NotificationDelivery.status.in_(["sent", "delivered", "read"]),
         )
     ) or 0
-    otp_failed_delivery = db.scalar(
+    notice_failed_delivery = db.scalar(
         select(func.count(NotificationDelivery.id)).where(
             NotificationDelivery.election_id == election.id,
-            NotificationDelivery.purpose == "otp",
+            NotificationDelivery.purpose == "registration",
             NotificationDelivery.status == "failed",
         )
     ) or 0
-    otp_requests = db.scalar(
-        select(func.count(OtpChallenge.id)).where(OtpChallenge.election_id == election.id)
+    notice_attempts = db.scalar(
+        select(func.count(NotificationDelivery.id)).where(
+            NotificationDelivery.election_id == election.id,
+            NotificationDelivery.purpose == "registration",
+        )
     ) or 0
     channel_rows = db.execute(
         select(
@@ -175,7 +177,7 @@ def overview(
         )
         .where(
             NotificationDelivery.election_id == election.id,
-            NotificationDelivery.purpose == "otp",
+            NotificationDelivery.purpose == "registration",
         )
         .group_by(NotificationDelivery.channel, NotificationDelivery.status)
     ).all()
@@ -195,7 +197,7 @@ def overview(
     last_delivery_failure = db.execute(
         select(NotificationDelivery).where(
             NotificationDelivery.election_id == election.id,
-            NotificationDelivery.purpose == "otp",
+            NotificationDelivery.purpose == "registration",
             NotificationDelivery.status == "failed",
         ).order_by(NotificationDelivery.created_at.desc())
     ).scalars().first()
@@ -213,15 +215,15 @@ def overview(
         "stats": stats,
         "live": {
             "accreditations_last_hour": recent_accreditations,
-            "failed_otp_attempts": failed_otp,
+            "failed_identity_checks": failed_identity,
             "rejected_duplicate_attempts": duplicate_attempts,
             "hourly_ballots": _hourly_ballots(db, election.id),
             "security_alerts": _security_alerts(db, election.id),
-            "otp_delivery": {
+            "registration_delivery": {
                 "mode": settings.delivery_mode,
-                "requests": otp_requests,
-                "sent": otp_sent,
-                "failed": otp_failed_delivery,
+                "attempts": notice_attempts,
+                "sent": notice_sent,
+                "failed": notice_failed_delivery,
                 "by_channel": [
                     {"channel": channel, **counts}
                     for channel, counts in by_channel.items()
@@ -237,7 +239,7 @@ def overview(
             "api": "operational",
             "database": "operational",
             "election_keys": "provisioned" if election.tally_public_key else "not provisioned",
-            "otp_delivery": settings.delivery_mode,
+            "notification_delivery": settings.delivery_mode,
             "configuration_locked": bool(election.locked_at),
             "checked_at": now().isoformat(),
         },

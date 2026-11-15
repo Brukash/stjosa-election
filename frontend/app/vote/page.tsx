@@ -198,7 +198,7 @@ export default function VotePage() {
             <h2 className="text-lg text-ink">You need an anonymous voting credential</h2>
             <p className="mt-2 text-sm leading-relaxed text-ink/60">
               Accredited voters receive one credential per election. Complete accreditation with your
-              Voter ID and OTP, then return here to open your ballot.
+              Voter ID, then return here to open your ballot.
             </p>
             <div className="mt-5 flex flex-wrap gap-3">
               <Link href="/accredit" className="btn-primary">
@@ -351,6 +351,15 @@ export default function VotePage() {
                     </button>
                     <button className="btn-primary" onClick={prepareBallot} disabled={busy || !complete}>
                       {busy ? "Encrypting…" : "Prepare encrypted ballot"}
+                    </button>
+                  </div>
+                ) : phase === "prepared" && prepared ? (
+                  <div className="flex flex-wrap gap-2">
+                    <button className="btn-ghost" onClick={() => setPhase("review")}>
+                      Review my selections
+                    </button>
+                    <button className="btn-dark" onClick={castBallot} disabled={busy}>
+                      {busy ? "Casting…" : "Cast my ballot"}
                     </button>
                   </div>
                 ) : (

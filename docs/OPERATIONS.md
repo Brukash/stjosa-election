@@ -14,8 +14,6 @@ Required backend variables are documented in `backend/.env.example`. Minimum pro
 DATABASE_URL=postgresql+psycopg://…@…pooler.supabase.com:5432/postgres
 SECRET_KEY=<32+ random bytes>
 MASTER_KEY=<32+ random bytes, stored in a secret manager>
-OTP_HASH_PEPPER=<32+ random bytes>
-DEV_EXPOSE_OTP=false
 DEMO_SEED=false
 APP_ORIGIN=https://elections.your-domain.org
 API_ORIGIN=https://api.elections.your-domain.org
@@ -31,7 +29,7 @@ Frontend: `NEXT_PUBLIC_API_URL=https://api.elections.your-domain.org`.
    - `supabase/migrations/0001_init.sql` — 30 tables (schema generated from the ORM).
    - `supabase/migrations/0002_security.sql` — RLS, grants, append-only audit trigger, ballot
      immutability, receipt/commitment integrity check.
-   - `supabase/migrations/0003_otp_channels.sql` — voter WhatsApp consent and delivery-channel index.
+   - `supabase/migrations/0003_otp_channels.sql` — voter WhatsApp consent and delivery-channel history.
 3. Confirm RLS is enabled on all sensitive tables (`Supabase → Database → Tables`).
 4. Create staff accounts through the application (or seed then change every password).
 5. Never expose the database connection string to the browser; the Next.js app talks only to FastAPI.
@@ -43,18 +41,20 @@ cd backend
 .venv/Scripts/python.exe scripts/export_postgres_schema.py > ../supabase/migrations/0001_init.sql
 ```
 
-## 2a. OTP delivery provider setup
+## 2a. Registration notice delivery
 
-OTPs must reach the contact on the approved register. Configure email, SMS and/or WhatsApp; the
-backend fails closed (`503`) outside development if none is configured. After one Voter ID entry the
-backend generates one OTP and sends it simultaneously through every available channel. The voter does
-not select a channel, and every destination is taken from the approved register.
+Accreditation is Voter ID-only: the voter enters the Voter ID from the approved register, and a match
+opens the credential flow. No OTP is generated or delivered.
+
+When the Chairman approves the register, the backend sends one registration notice by email and one
+by WhatsApp to each eligible voter. The email includes the voter's **Voter ID**, which is the identifier
+used for accreditation. Successful channels are recorded on the voter so a repeat approval only retries
+the missing channel. Approval commits before delivery; provider failures do not cancel the approval.
 
 The additive migration `supabase/migrations/0003_otp_channels.sql` adds the voter WhatsApp consent
-column. The API also applies that additive column defensively at startup for older deployments.
-Registration notices use `supabase/migrations/0004_registration_notifications.sql` for per-channel
-sent timestamps and a `purpose` column on `notification_deliveries`; the API adds those columns
-defensively as well.
+column and remains part of the schema history. Registration notices use
+`supabase/migrations/0004_registration_notifications.sql` for per-channel sent timestamps and a
+`purpose` column on `notification_deliveries`; the API adds those columns defensively as well.
 
 ### Email — Resend (recommended)
 
@@ -63,66 +63,35 @@ defensively as well.
    policy for the subdomain.
 3. Set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` (server-side secret only) and
    `EMAIL_FROM="SJC Jos Alumni Election <no-reply@elections.sjcjos-alumni.org>"`.
-4. Send a test accreditation OTP to a committee mailbox and confirm inbox placement.
+4. Send a test registration notice to a committee mailbox and confirm inbox placement.
 
 ### Email — SMTP fallback
 
 `EMAIL_PROVIDER=smtp` plus `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
 `SMTP_STARTTLS=true`. Works with the association's existing mail host.
 
-### SMS — Termii
-
-1. Create a Termii account and obtain an API key from the dashboard.
-2. Register and get approval for a sender ID (for example `SJCAlumni`) that can deliver to Nigerian
-   (+234) numbers. Confirm transactional/DND routing and pricing before the election.
-3. Set `SMS_PROVIDER=termii`, `TERMII_API_KEY`, `TERMII_SENDER_ID` and `TERMII_CHANNEL=dnd`.
-   Termii's `generic` route is promotional and is not appropriate for OTPs.
-4. Numbers must be E.164 (`+234…`) on the register. SMS is a separate channel from WhatsApp.
-5. The legacy Twilio settings remain in the code only for migration; do not use them for a new
-   election unless Termii cannot provide a sender.
-
 ### WhatsApp — Meta WhatsApp Business Platform / Cloud API
 
 1. Create a Meta Business account, a WhatsApp Business Account and a system-user access token with
    `whatsapp_business_messaging` permission. Never use a personal WhatsApp account or automation.
-2. Register the sending phone number and create an **Authentication** message template (for example
-   `sjc_election_otp`, language `en_US`) with an OTP button. The sender includes the same code in
-   both the body and the OTP button parameter, as Meta requires.
+2. Create an approved **Utility** template (for example `sjc_registration_confirmation`, language
+   `en_US`) whose body uses three parameters in this order: `{{1}}` voter full name, `{{2}}` election
+   title and `{{3}}` Voter ID. This is not an authentication/OTP template.
 3. Set `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
-   `WHATSAPP_TEMPLATE_NAME` and `WHATSAPP_TEMPLATE_LANGUAGE`. Keep the token in the server-side
-   environment/secret store only.
+   `WHATSAPP_REGISTRATION_TEMPLATE_NAME` and `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE`. Keep the
+   token in the server-side environment/secret store only.
 4. Record each voter's `whatsapp_consent` in the register CSV/import or via the register screen.
-   WhatsApp is reported as unavailable and skipped without consent; email and SMS still proceed.
+   WhatsApp is reported as unavailable and skipped without consent; email still proceeds.
 5. Set `WHATSAPP_APP_SECRET` and `WHATSAPP_VERIFY_TOKEN`, then subscribe the Meta app to
    `https://<api-host>/api/webhooks/whatsapp`. Signed delivery/read/failure callbacks update
-   `notification_deliveries`; no OTP is included.
-6. Send a test authentication template to a consented committee number and confirm delivery before
-   the election. The Super Administrator can inspect readiness and limits at `/admin/delivery`.
-
-### Registration notices on register approval
-
-Approving the register sends one email and one WhatsApp registration notice to each eligible voter.
-This is separate from the OTP flow:
-
-1. Create a second, **Utility** template (for example `sjc_registration_confirmation`, language
-   `en_US`). Its body must use three parameters in this order: `{{1}}` voter full name, `{{2}}`
-   election title and `{{3}}` Voter ID. Do not reuse the OTP authentication template.
-2. Set `WHATSAPP_REGISTRATION_TEMPLATE_NAME` and
-   `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE`. The template must be approved by Meta before the
-   election; otherwise the WhatsApp channel is recorded as failed/unavailable and email still sends.
-3. Email uses the same Resend/SMTP provider and sender configured above. A voter without an email
-   address is reported as email-unavailable and is not sent a message.
-4. WhatsApp still requires recorded `whatsapp_consent`. Without consent the channel is reported as
-   unavailable and no WhatsApp message is attempted.
-5. Successful channels are timestamped on the voter (`registration_email_sent_at`,
-   `registration_whatsapp_sent_at`). Approving the register again retries only channels that have not
-   succeeded, so repeated approval does not spam voters. Approval is committed before notifications,
-   and provider failures are recorded without cancelling the approval.
+   `notification_deliveries`; message contents are not stored.
+6. Send a test utility template to a consented committee number and confirm delivery before the
+   election. The Super Administrator can inspect readiness at `/admin/delivery`.
 
 ### Production guard and preflight
 
 In production the backend refuses to start when a critical setting is missing or still on a
-development default: weak `SECRET_KEY`/`MASTER_KEY`/`OTP_HASH_PEPPER`, the demo password, no OTP
+development default: weak `SECRET_KEY`/`MASTER_KEY`, the demo password, no notification delivery
 channel, a non-https `APP_ORIGIN`, SQLite, or `DEMO_SEED=true`. Fix the reported setting and restart.
 
 Run the read-only checks before opening the election:
@@ -130,27 +99,11 @@ Run the read-only checks before opening the election:
 ```bash
 cd backend
 .venv/Scripts/python.exe scripts/preflight.py
-.venv/Scripts/python.exe scripts/check_delivery.py --to-email you@example.org
-.venv/Scripts/python.exe scripts/check_delivery.py --to-phone +2348012345678
-.venv/Scripts/python.exe scripts/check_delivery.py --to-whatsapp +2348012345678
-.venv/Scripts/python.exe scripts/test_otp_delivery.py
+.venv/Scripts/python.exe scripts/test_notifications.py
 ```
 
-After that, send one live WhatsApp authentication-template test to a consented committee number via
-the Meta dashboard or a small backend test, and confirm the signed status callback reaches
-`/api/webhooks/whatsapp`.
-
-`preflight.py` reports configuration, database reachability, missing tables and recent elections;
-it exits non-zero when production would fail closed. `check_delivery.py` prints the active channels
-and sends a live test only when you pass a destination (no OTP or secret is printed).
-
-### Production guard (details)
-
-- Set `ENVIRONMENT=production` (anything other than `development` counts as non-development).
-- Keep `DEV_EXPOSE_OTP=false`. Even if set true, on-screen OTP requires a loopback `APP_ORIGIN`
-  **and** a development environment, so production can never display a code.
-- Check the monitoring dashboard: delivery mode, sent and failed OTP counts, and the last failure
-  reason. Investigate any spike in failures before opening voting.
+`preflight.py` reports configuration, database reachability, missing tables and recent elections; it
+exits non-zero when production would fail closed. It does not send messages or expose secrets.
 
 ## 3. Backend deployment
 
@@ -197,7 +150,7 @@ archive it under dual control for the retention period.
 1. PostgreSQL database (all tables, especially `ballots`, `ballot_commitments`,
    `published_commitment_batches`, `tally_*`, `result_*`, `audit_logs`).
 2. `keys/` directory (encrypted private keys).
-3. `MASTER_KEY`, `SECRET_KEY`, `OTP_HASH_PEPPER` in the secret manager.
+3. `MASTER_KEY`, `SECRET_KEY` and provider credentials in the secret manager.
 4. Published commitment manifests (`GET /api/commitments/{id}` and batch downloads) and declared
    result certificates.
 
@@ -237,19 +190,19 @@ schedule are still required before go-live.
 | T-14 days | Configure election, positions, candidates, verification settings | Chairman |
 | T-10 days | Import register, exclude ineligible records, approve register | Chairman |
 | T-7 days | Two-person configuration approval; confirm keys provisioned | Chairman + Returning Officer |
-| T-1 day | Check monitoring, OTP delivery, backups; enrol MFA for all staff | All |
+| T-1 day | Check monitoring, email/WhatsApp delivery, backups; enrol MFA for all staff | All |
 | T-0 | Open accreditation, then voting | Chairman |
-| During voting | Monitor turnout, OTP failures, duplicate attempts; resolve accreditation exceptions | All |
+| During voting | Monitor turnout, failed Voter ID checks, duplicate attempts; resolve accreditation exceptions | All |
 | Close | Close voting; publish commitments; dual authorise count; run count | Chairman + Returning Officer |
 | T+ | Submit provisional results, approve and declare, download audit reports | Returning Officer + Chairman |
 | T+30 days | Archive election, retain records and keys | Chairman |
 
 ## 8. Incident procedures
 
-**OTP delivery outage:** voters see a generic failure and no code is issued. Switch provider
-credentials, confirm the sender domain/number, then retry. Delivery failures are recorded in
-`notification_deliveries` without OTPs; keep `DEV_EXPOSE_OTP=false` — never fall back to displaying
-codes in production.
+**Email or WhatsApp notice outage:** registration approval still succeeds, but the affected channel
+is recorded as failed and can be retried by approving the register again. Fix the provider credentials
+or sender domain, then retry only the missing channel. Message contents are never written to delivery
+records.
 
 **Suspected credential compromise:** revoke the issuance via the accreditation exception endpoint,
 audit the action, notify the committee. Never delete audit records.
@@ -270,9 +223,9 @@ already published must never be removed.
 
 - `/api/health` for liveness and database connectivity.
 - Election dashboard for availability, failed attempts, duplicates and turnout.
-- Application logs must never contain OTPs, passwords, credentials or decrypted selections; the
+- Application logs must never contain passwords, credentials or decrypted selections; the
   backend only logs counts and audit metadata.
-- Alert on: credential issuance failures, OTP failure spikes, reconciliation imbalance, signature
+- Alert on: credential issuance failures, failed Voter ID check spikes, reconciliation imbalance, signature
   verification failures, audit-report check failures.
 
 ## 10. Retention

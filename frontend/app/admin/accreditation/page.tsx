@@ -80,7 +80,7 @@ export default function AccreditationConsolePage() {
         auth: true,
       });
       setNotice(
-        `Credential for ${voterId.trim()} revoked. The voter can now accredit again with a fresh OTP; the old issuance remains in the audit trail.`
+        `Credential for ${voterId.trim()} revoked. The voter can now accredit again with their Voter ID; the old issuance remains in the audit trail.`
       );
       setVoterId("");
       setReason("");
@@ -139,7 +139,7 @@ export default function AccreditationConsolePage() {
             label="Yet to accredit"
             value={Math.max(0, overview.stats.eligible_voters - overview.stats.accredited_voters)}
           />
-          <Stat label="Failed OTP attempts" value={overview.live.failed_otp_attempts} />
+          <Stat label="Failed Voter ID checks" value={overview.live.failed_identity_checks} />
         </div>
       ) : null}
 
@@ -220,7 +220,7 @@ export default function AccreditationConsolePage() {
             <>
               <p className="mt-1 text-sm text-ink/55">
                 Use only when a voter has lost their anonymous credential and cannot complete voting.
-                The voter will need a fresh OTP and will receive a new credential.
+                The voter will need to verify their Voter ID again and will receive a new credential.
               </p>
               <form onSubmit={resetCredential} className="mt-4 space-y-3">
                 <div>

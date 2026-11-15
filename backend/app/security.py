@@ -155,8 +155,8 @@ ROLE_DESCRIPTIONS = {
         "counting, submits and publishes results. Cannot configure the election or manage accounts."
     ),
     ACCREDITATION: (
-        "Accreditation Officer. Imports the voter register, supports voter accreditation and OTP "
-        "exceptions, and monitors participation. No ballot, tally, result or account access."
+        "Accreditation Officer. Imports the voter register, supports Voter ID accreditation and "
+        "credential exceptions, and monitors participation. No ballot, tally, result or account access."
     ),
     OBSERVER: (
         "Election Observer. Read-only oversight of monitoring, published commitments, declared "
@@ -179,7 +179,6 @@ PERMISSIONS: dict[str, set[str]] = {
     ACCREDITATION: {
         "election.view", "register.view", "register.import", "accreditation.manage",
         "accreditation.oversight", "monitor.view", "commitments.view", "audit.view_limited",
-        "otp.review",
     },
     RETURNING: {
         "election.view", "monitor.view", "counting.authorise", "counting.run", "tally.view",

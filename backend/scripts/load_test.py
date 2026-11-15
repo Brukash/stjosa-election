@@ -1,6 +1,6 @@
 """Indicative load test for a local or staging deployment.
 
-Drives complete voter flows (OTP -> credential -> prepare -> cast) in parallel
+Drives complete voter flows (Voter ID -> credential -> prepare -> cast) in parallel
 against a running API. This is NOT a substitute for independent performance
 testing; SQLite and a single Uvicorn worker bound the result.
 

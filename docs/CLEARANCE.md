@@ -9,7 +9,7 @@ certification and must be signed off by people outside the development team.**
 | Gate | Status | Evidence |
 | --- | --- | --- |
 | Functional mock election | Passed | `backend/scripts/smoke_test.py` — full suite: accreditation, credential, challenge, cast, receipts, commitments, dual-control count, declaration, audit report |
-| OTP delivery | Passed against mock providers | `backend/scripts/test_otp_delivery.py` — 16 checks covering simultaneous one-OTP fan-out through Resend, Termii and Meta WhatsApp, partial/all-provider failure, expiry, duplicate accreditation, cooldown, consent, monitoring and abuse controls; registration approval notices by email and WhatsApp utility template, consent handling and repeat-approval idempotency; no live provider credentials used |
+| Registration notices | Passed against mock providers | `backend/scripts/test_notifications.py` — direct Voter ID accreditation with no OTP delivery, retired OTP routes returning 404, unknown Voter ID rejection, registration approval notices by email and WhatsApp utility template, Voter ID included in the email, consent handling, per-channel delivery records, monitoring and repeat-approval idempotency; no live provider credentials used |
 | MFA | Passed | Enrol → activate → login without code (401), wrong code (401), correct code (200); UI at `/admin/security` |
 | Verification settings independence | Passed | Same official cannot configure and approve; second official approval enforced; smoke check |
 | Deployment preflight | Passed locally | `python scripts/preflight.py` → READY (31 tables, no production issues in development) |
@@ -26,8 +26,8 @@ Give the reviewer the `docs/SECURITY.md` protocol description and a staging depl
 
 1. Authentication: password hashing, lockout/rate limits, session token forgery, staff MFA bypass,
    role escalation between Chairman / Returning Officer / Accreditation Officer / Observer.
-2. Accreditation and OTP abuse: enumeration of Voter IDs, OTP brute force across sessions, resend
-   flooding, reused credentials, concurrent requests for one voter.
+2. Accreditation abuse: enumeration of Voter IDs, guessing or sharing of Voter IDs, reused
+   credentials, and concurrent requests for one voter.
 3. Ballot secrecy: confirm no API, report or database query links a voter to a ballot; verify
    receipt references cannot decrypt ballots; verify challenge does not leave a castable ballot.
 4. Cryptography: blind RSA-FDH credential issuance, AES-256-GCM ballot envelope, RSA-OAEP key wrap,
@@ -35,7 +35,7 @@ Give the reviewer the `docs/SECURITY.md` protocol description and a staging depl
 5. Application security: injection, XSS in candidate/register fields, CSRF on authenticated mutations,
    permissive CORS, file/path handling, verbose errors leaking secrets, RLS on Supabase.
 6. Operational security: key custody and release, secret handling, backup encryption, log redaction
-   (no OTPs, tokens, ballot choices), audit tamper-resistance, denial of service.
+   (no tokens or ballot choices), audit tamper-resistance, denial of service.
 7. Election logic: freeze after first accepted ballot, duplicate voting, results hidden while voting,
    declaration only after review, emergency-change authorisation and audit.
 
@@ -44,7 +44,7 @@ no critical/high issue remains open.
 
 ## 3. Performance test
 
-Run against a staging deployment with PostgreSQL, the production worker count and OTP delivery
+Run against a staging deployment with PostgreSQL, the production worker count and notification delivery
 disabled or mocked (so provider latency does not dominate):
 
 ```bash
@@ -52,7 +52,7 @@ cd backend
 python scripts/load_test.py --voters 24 --workers 8
 ```
 
-The script drives full voter flows (OTP → credential → prepare → cast) and reports completion,
+The script drives full voter flows (Voter ID → credential → prepare → cast) and reports completion,
 throughput and p50/p95 latency. It refuses to hide failures.
 
 **Local indicative result (not capacity evidence):** 8 voters / 4 workers → 8/8 completed,
@@ -67,14 +67,14 @@ Do not run a load test against the production database during a live election.
 
 **Purpose:** prove the operational runbook with real officials before the binding election.
 
-1. **Setup (T-7 days):** staging deployment with production-like OTP provider and a test sender;
+1. **Setup (T-7 days):** staging deployment with production-like email/WhatsApp providers and test senders;
    `DEMO_SEED=false`; create pilot election; import a pilot register of 20–50 consenting alumni;
    configure positions/candidates; provision keys; approve configuration and verification settings
    through the two-person flow; enrol MFA for every official.
 2. **Briefing (T-2 days):** walk officials through accreditation, counting authorisation, result
    review/declaration, emergency changes and audit exports. Issue Voter IDs privately.
 3. **Pilot voting (60–90 minutes):** open accreditation, then voting; ask at least one voter to use
-   challenge verification; confirm one-vote-only with a deliberate retry; test one invalid OTP.
+   challenge verification; confirm one-vote-only with a deliberate retry; test one invalid Voter ID.
 4. **Close and count:** close voting, authorise counting with Chairman + Returning Officer, review
    provisional results, declare, publish the commitment list.
 5. **Verify:** voters check receipts and inclusion; officials export the audit report (PDF/XLSX);
@@ -89,11 +89,11 @@ security finding.
 
 ## 5. Production go-live checklist
 
-- [ ] `ENVIRONMENT=production`, `APP_ORIGIN` https, `DEV_EXPOSE_OTP=false`
-- [ ] Strong `SECRET_KEY`, `MASTER_KEY`, `OTP_HASH_PEPPER`; secrets stored outside the repository
+- [ ] `ENVIRONMENT=production`, `APP_ORIGIN` https
+- [ ] Strong `SECRET_KEY`, `MASTER_KEY`; secrets stored outside the repository
 - [ ] `DATABASE_URL` PostgreSQL with migrations applied; RLS verified
 - [ ] `DEMO_SEED=false`; no demo accounts or sample voters
-- [ ] Email/SMS provider verified with `python scripts/check_delivery.py --to-email … --to-phone …`
+- [ ] Email/WhatsApp providers verified with live registration notices to committee test accounts
 - [ ] `python scripts/preflight.py` → READY
 - [ ] MFA enrolled for every official; recovery/reset procedure agreed
 - [ ] Independent security review signed off; performance target met; pilot signed off

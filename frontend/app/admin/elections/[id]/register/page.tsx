@@ -347,7 +347,7 @@ export default function RegisterPage() {
                   setVoterForm({ ...voterForm, whatsapp_consent: event.target.checked })
                 }
               />
-              WhatsApp OTP consent recorded
+              WhatsApp consent recorded
             </label>
             <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-2">
               <button
@@ -357,7 +357,7 @@ export default function RegisterPage() {
                 {busy ? "Adding…" : "Add voter"}
               </button>
               <span className="text-[11px] text-ink/45">
-                Email or phone is required for OTP delivery.
+                Email is required for the registration notice; phone plus WhatsApp consent enables WhatsApp.
               </span>
             </div>
           </form>

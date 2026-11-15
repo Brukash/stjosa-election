@@ -18,10 +18,10 @@ export default function DeliverySettingsPage() {
 
   return (
     <div className="space-y-5">
-      <SectionHeading eyebrow="Technical settings" title="OTP delivery providers">
-        The Super Administrator manages provider credentials in the server-side environment or
-        deployment secret store. Secrets are never editable here, returned by the API, or stored in
-        the browser.
+      <SectionHeading eyebrow="Technical settings" title="Notification delivery providers">
+        The Super Administrator manages provider credentials for registration emails and WhatsApp
+        notices in the server-side environment or deployment secret store. Secrets are never editable
+        here, returned by the API, or stored in the browser.
       </SectionHeading>
 
       {error ? <Alert tone="error">{error}</Alert> : null}
@@ -30,9 +30,9 @@ export default function DeliverySettingsPage() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Stat label="Environment" value={data.environment} />
-            <Stat label="OTP length" value={`${data.otp.length} digits`} />
-            <Stat label="Validity" value={`${Math.round(data.otp.ttl_seconds / 60)} min`} />
-            <Stat label="Attempt / resend" value={`${data.otp.max_attempts} / ${data.otp.resend_seconds}s`} />
+            <Stat label="Delivery mode" value={data.delivery_mode} />
+            <Stat label="Email provider" value={data.providers.find((item: any) => item.channel === "email")?.provider ?? "none"} />
+            <Stat label="WhatsApp provider" value={data.providers.find((item: any) => item.channel === "whatsapp")?.provider ?? "none"} />
           </div>
 
           <div className="grid gap-4 lg:grid-cols-3">
@@ -79,22 +79,11 @@ export default function DeliverySettingsPage() {
           </div>
 
           <Card className="card-pad">
-            <SectionHeading eyebrow="Controls" title="Accreditation limits">
-              These limits are enforced server-side for every challenge and resend.
+            <SectionHeading eyebrow="Controls" title="Registration notice delivery">
+              Registration notices are sent when the Chairman approves the register. Email requires an
+              address; WhatsApp requires a consented mobile number and the approved utility template.
             </SectionHeading>
             <dl className="space-y-1">
-              <div className="kv">
-                <dt>Resend cooldown</dt>
-                <dd>{data.otp.resend_seconds} seconds</dd>
-              </div>
-              <div className="kv">
-                <dt>Maximum requests per voter / hour</dt>
-                <dd>{data.otp.max_requests_per_hour}</dd>
-              </div>
-              <div className="kv">
-                <dt>Maximum incorrect attempts</dt>
-                <dd>{data.otp.max_attempts} per challenge</dd>
-              </div>
               <div className="kv">
                 <dt>WhatsApp platform</dt>
                 <dd>{data.whatsapp.official_platform}</dd>
@@ -104,13 +93,17 @@ export default function DeliverySettingsPage() {
                 <dd>Required and recorded on the electoral register</dd>
               </div>
               <div className="kv">
+                <dt>Registration template</dt>
+                <dd className="font-mono text-xs">{data.whatsapp.registration_template_name}</dd>
+              </div>
+              <div className="kv">
                 <dt>Webhook signature</dt>
                 <dd>{data.whatsapp.webhook_signed ? "Enabled" : "Set WHATSAPP_APP_SECRET"}</dd>
               </div>
             </dl>
             <Alert tone="info">
               {data.security_note} After changing provider variables, restart or redeploy the API.
-              Verify the sender domain, SMS sender and Meta template before an official election.
+              Verify the sender domain and Meta template before an official election.
             </Alert>
           </Card>
         </>

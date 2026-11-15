@@ -111,14 +111,14 @@ export default function AdminDashboardPage() {
           </div>
 
           <Card className="card-pad">
-            <SectionHeading eyebrow="Accreditation delivery" title="OTP channels and provider health">
-              Requests, successful deliveries and failures are recorded without OTP values or full
-              voter contact details.
+            <SectionHeading eyebrow="Registration delivery" title="Email and WhatsApp notices">
+              Successful sends and failures are recorded without message contents or full voter contact
+              details.
             </SectionHeading>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Stat label="OTP requests" value={overview.live.otp_delivery.requests ?? 0} />
-              <Stat label="Delivered" value={overview.live.otp_delivery.sent ?? 0} />
-              <Stat label="Failed deliveries" value={overview.live.otp_delivery.failed ?? 0} />
+              <Stat label="Notice attempts" value={overview.live.registration_delivery.attempts ?? 0} />
+              <Stat label="Delivered" value={overview.live.registration_delivery.sent ?? 0} />
+              <Stat label="Failed deliveries" value={overview.live.registration_delivery.failed ?? 0} />
             </div>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <div className="table-wrap">
@@ -132,7 +132,7 @@ export default function AdminDashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(overview.live.otp_delivery.by_channel ?? []).map((row: any) => (
+                    {(overview.live.registration_delivery.by_channel ?? []).map((row: any) => (
                       <tr key={row.channel}>
                         <td className="capitalize">{row.channel}</td>
                         <td>{row.attempts}</td>
@@ -144,7 +144,7 @@ export default function AdminDashboardPage() {
                 </table>
               </div>
               <div className="space-y-1">
-                {(overview.live.otp_delivery.providers ?? []).map((provider: any) => (
+                {(overview.live.registration_delivery.providers ?? []).map((provider: any) => (
                   <div key={provider.channel} className="kv">
                     <dt className="capitalize">{provider.label}</dt>
                     <dd>
@@ -156,9 +156,9 @@ export default function AdminDashboardPage() {
                 ))}
               </div>
             </div>
-            {overview.live.otp_delivery.last_failure_reason ? (
+            {overview.live.registration_delivery.last_failure_reason ? (
               <p className="mt-3 text-xs text-red-700">
-                Last failure: {overview.live.otp_delivery.last_failure_reason}
+                Last failure: {overview.live.registration_delivery.last_failure_reason}
               </p>
             ) : null}
           </Card>
@@ -188,7 +188,7 @@ export default function AdminDashboardPage() {
               </div>
               <div className="mt-5 grid gap-3 sm:grid-cols-3">
                 <Stat label="Accreditations (1h)" value={overview.live.accreditations_last_hour} />
-                <Stat label="Failed OTP attempts" value={overview.live.failed_otp_attempts} />
+                <Stat label="Failed Voter ID checks" value={overview.live.failed_identity_checks} />
                 <Stat label="Rejected duplicates" value={overview.live.rejected_duplicate_attempts} />
               </div>
             </Card>

@@ -75,18 +75,38 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const permissions: string[] = profile.permissions ?? [];
   const required = requiredPermissions(pathname);
   const authorized = !required || required.some((permission) => permissions.includes(permission));
+  const roleNames: string[] = profile.role_names?.length
+    ? profile.role_names
+    : profile.roles ?? [];
 
   return (
     <div className="min-h-screen bg-cream">
-      <header className="border-b border-line bg-white">
+      <header className="sticky top-0 z-30 border-b border-line bg-white/95 shadow-sm backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <Crest size={34} />
             <div className="leading-tight">
               <p className="font-display text-sm text-ink">Election Control Room</p>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/40">
-                {profile.full_name} · {profile.role_names?.[0]}
+              <p className="mt-0.5 text-[11px] font-medium text-ink/60">
+                Signed in as <span className="font-semibold text-ink">{profile.full_name}</span>
               </p>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-ink/40">
+                  Role
+                </span>
+                {roleNames.length ? (
+                  roleNames.map((role: string) => (
+                    <span
+                      key={role}
+                      className="rounded-full border border-green/20 bg-green/[0.08] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-green"
+                    >
+                      {role}
+                    </span>
+                  ))
+                ) : (
+                  <span className="pill-grey">No role assigned</span>
+                )}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">

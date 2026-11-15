@@ -1,6 +1,6 @@
 """End-to-end mock election against a running backend.
 
-Exercises: accreditation (OTP + blinded credential), cast-as-intended challenge,
+Exercises: accreditation (Voter ID + blinded credential), cast-as-intended challenge,
 ballot casting and idempotent retry, credential reuse rejection, receipt + PDF,
 commitment publication, dual-control counting, results declaration, audit report
 and configuration freeze.
@@ -52,13 +52,10 @@ def public_election() -> dict:
 
 
 def issue_credential(election: dict, voter_id: str) -> dict:
-    otp_request = call("POST", "/accreditation/request-otp",
-                       json={"election_id": election["id"], "voter_id": voter_id})
-    assert otp_request["dev_otp"], "dev_otp unavailable (set DEV_EXPOSE_OTP=true for the mock election)"
-    verified = call("POST", "/accreditation/verify-otp", json={
+    verified = call("POST", "/accreditation/verify-voter", json={
         "election_id": election["id"], "voter_id": voter_id,
-        "challenge_id": otp_request["challenge_id"], "otp": otp_request["dev_otp"],
     })
+    assert verified["voter"]["voter_id"] == voter_id, "Voter ID verification returned another voter"
     reference = election["reference"]
     token_hex = secrets.token_hex(32)
     numbers = crypto.credential_public_numbers()
@@ -324,7 +321,8 @@ def main() -> None:
     assert full["provisional"] is not None and full["approvals"]
 
     limited_actions = {
-        "otp.request", "otp.deliver", "otp.verify", "credential.issued", "credential.revoked",
+        "voter.verify", "otp.request", "otp.deliver", "otp.verify",
+        "credential.issued", "credential.revoked",
         "register.import", "register.voter_added", "register.eligibility", "register.approve",
     }
     limited = call("GET", f"/monitoring/{election['id']}/audit-logs?limit=200",

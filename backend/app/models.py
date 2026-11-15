@@ -205,7 +205,7 @@ class AccreditationRecord(Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
     ip_address: Mapped[str | None] = mapped_column(String(64))
-    method: Mapped[str] = mapped_column(String(40), default="voter_id_otp", nullable=False)
+    method: Mapped[str] = mapped_column(String(40), default="voter_id", nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
 
 
@@ -235,7 +235,7 @@ class CredentialIssuance(Base):
 
 
 class AccreditationSession(Base):
-    """Short-lived proof that OTP verification succeeded, used to request a signature."""
+    """Short-lived proof that Voter ID verification succeeded, used to request a signature."""
 
     __tablename__ = "accreditation_sessions"
 

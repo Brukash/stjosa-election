@@ -157,7 +157,7 @@ class Settings:
         return bool(
             self.whatsapp_access_token
             and self.whatsapp_phone_number_id
-            and self.whatsapp_template_name
+            and self.whatsapp_registration_template_name
         )
 
     @property
@@ -174,8 +174,6 @@ class Settings:
         channels: list[str] = []
         if self.email_configured:
             channels.append("email")
-        if self.sms_configured:
-            channels.append("sms")
         if self.whatsapp_configured:
             channels.append("whatsapp")
         return channels
@@ -184,8 +182,6 @@ class Settings:
     def delivery_mode(self) -> str:
         if self.delivery_channels:
             return "+".join(self.delivery_channels)
-        if self.expose_dev_otp:
-            return "development-on-screen"
         return "not configured"
 
     @property
@@ -193,7 +189,7 @@ class Settings:
         """Configuration that must be resolved before running a real election.
 
         Empty for development. In production, any entry blocks startup so a
-        misconfigured deployment fails closed instead of issuing unusable OTPs.
+        misconfigured deployment fails closed instead of losing registration notices.
         """
         if not self.is_production:
             return []
@@ -202,12 +198,10 @@ class Settings:
             issues.append("SECRET_KEY still uses the development default")
         if self.master_key.startswith("dev-only"):
             issues.append("MASTER_KEY still uses the development default")
-        if self.otp_pepper.startswith("dev-only"):
-            issues.append("OTP_HASH_PEPPER still uses the development default")
         if self.seed_password == "ChangeMe!2026":
             issues.append("SEED_DEFAULT_PASSWORD still uses the demo default")
         if not self.delivery_channels:
-            issues.append("no OTP delivery channel is configured (email, SMS or WhatsApp)")
+            issues.append("no notification delivery channel is configured (email or WhatsApp)")
         if not self.app_origin.lower().startswith("https://"):
             issues.append("APP_ORIGIN must be an https origin in production")
         if "sqlite" in self.database_url:
