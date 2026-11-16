@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { ElectionChooser } from "@/components/ElectionChooser";
 import { PublicShell } from "@/components/PublicShell";
 import { Alert, Card, CheckRow, Loading, StatusPill } from "@/components/ui";
 import { api, formatDate } from "@/lib/api";
@@ -12,11 +13,12 @@ import {
   loadCredential,
   verifyChallenge,
 } from "@/lib/credential";
+import { usePublicElectionChoice } from "@/lib/publicElections";
 
 type Phase = "ballot" | "review" | "prepared" | "challenged" | "cast";
 
 export default function VotePage() {
-  const [election, setElection] = useState<any | null>(null);
+  const { options, selectedId, election, choose, loading, error: choiceError } = usePublicElectionChoice();
   const [credential, setCredential] = useState<Credential | null>(null);
   const [selections, setSelections] = useState<Record<string, string>>({});
   const [phase, setPhase] = useState<Phase>("ballot");
@@ -28,13 +30,15 @@ export default function VotePage() {
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    api("/api/public/election")
-      .then((data) => {
-        setElection(data.election);
-        if (data.election) setCredential(loadCredential(data.election.id));
-      })
-      .catch((err) => setError(err.message));
-  }, []);
+    setSelections({});
+    setPhase("ballot");
+    setPrepared(null);
+    setReceipt(null);
+    setChecks(null);
+    setNotice("");
+    setError("");
+    setCredential(selectedId ? loadCredential(selectedId) : null);
+  }, [selectedId]);
 
   const positions = election?.positions ?? [];
   const selectedCount = Object.keys(selections).length;
@@ -101,7 +105,7 @@ export default function VotePage() {
   }
 
   async function castBallot() {
-    if (!prepared || !credential) return;
+    if (!election || !prepared || !credential) return;
     setBusy(true);
     setError("");
     try {
@@ -139,7 +143,7 @@ export default function VotePage() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-green">Official ballot</p>
-            <h1 className="mt-2 text-3xl text-ink">{election?.title ?? "Loading ballot…"}</h1>
+            <h1 className="mt-2 text-3xl text-ink">{election?.title ?? "Choose an election"}</h1>
             <p className="mt-1 text-xs text-ink/50">
               {election ? `Reference ${election.reference} · Closes ${formatDate(election.closes_at)}` : ""}
             </p>
@@ -148,11 +152,25 @@ export default function VotePage() {
         </div>
 
         {error ? <div className="mt-5"><Alert tone="error">{error}</Alert></div> : null}
+        {choiceError ? <div className="mt-5"><Alert tone="error">{choiceError}</Alert></div> : null}
         {notice ? <div className="mt-5"><Alert tone="warn">{notice}</Alert></div> : null}
+        {loading ? <Loading label="Loading active elections…" /> : null}
+        {!loading && options?.length === 0 ? (
+          <div className="mt-5">
+            <Alert tone="info">No election is currently open for accreditation or voting.</Alert>
+          </div>
+        ) : null}
+        {options && options.length > 1 ? (
+          <ElectionChooser elections={options} selectedId={selectedId} onSelect={choose} />
+        ) : null}
+        {!loading && options && options.length > 0 && !selectedId ? (
+          <div className="mt-5">
+            <Alert tone="info">Choose an election above to open its ballot.</Alert>
+          </div>
+        ) : null}
+        {selectedId && !election && !choiceError ? <Loading label="Loading election…" /> : null}
 
-        {!election ? (
-          <Loading />
-        ) : phase === "cast" && receipt ? (
+        {!election ? null : phase === "cast" && receipt ? (
           <Card className="card-pad mt-6 animate-rise">
             <div className="flex items-center gap-3">
               <span className="flex h-11 w-11 items-center justify-center rounded-full bg-green/10 text-xl text-green">
@@ -205,7 +223,7 @@ export default function VotePage() {
               Voter ID, then return here to open your ballot.
             </p>
             <div className="mt-5 flex flex-wrap gap-3">
-              <Link href="/accredit" className="btn-primary">
+              <Link href={`/accredit?election=${encodeURIComponent(election.id)}`} className="btn-primary">
                 Accredit now
               </Link>
               <Link href="/verify" className="btn-outline">

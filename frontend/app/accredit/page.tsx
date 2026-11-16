@@ -2,16 +2,17 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { ElectionChooser } from "@/components/ElectionChooser";
 import { PublicShell } from "@/components/PublicShell";
 import { Alert, Card, Loading, StatusPill } from "@/components/ui";
 import { api, formatDate } from "@/lib/api";
 import { issueCredential, storeCredential } from "@/lib/credential";
+import { usePublicElectionChoice } from "@/lib/publicElections";
 
 type Step = "identify" | "credential" | "ready";
 
 export default function AccreditPage() {
-  const [election, setElection] = useState<any | null>(null);
-  const [loadError, setLoadError] = useState("");
+  const { options, selectedId, election, choose, loading, error: choiceError } = usePublicElectionChoice();
   const [step, setStep] = useState<Step>("identify");
   const [voterId, setVoterId] = useState("");
   const [session, setSession] = useState<any | null>(null);
@@ -20,15 +21,18 @@ export default function AccreditPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api("/api/public/election")
-      .then((data) => setElection(data.election))
-      .catch((err) => setLoadError(err.message));
-  }, []);
+    setStep("identify");
+    setSession(null);
+    setCredential(null);
+    setVoterId("");
+    setError("");
+  }, [selectedId]);
 
-  const accreditationOpen = ["accreditation_open", "voting_open"].includes(election?.status);
+  const accreditationOpen = ["accreditation_open", "voting_open"].includes(election?.status ?? "");
 
   async function verifyVoter(event: React.FormEvent) {
     event.preventDefault();
+    if (!election) return;
     setBusy(true);
     setError("");
     try {
@@ -48,6 +52,7 @@ export default function AccreditPage() {
   }
 
   async function createCredential() {
+    if (!election) return;
     setBusy(true);
     setError("");
     try {
@@ -85,8 +90,22 @@ export default function AccreditPage() {
           which ballot that credential later submits.
         </p>
 
-        {loadError ? <div className="mt-6"><Alert tone="error">{loadError}</Alert></div> : null}
-        {!election && !loadError ? <Loading /> : null}
+        {choiceError ? <div className="mt-6"><Alert tone="error">{choiceError}</Alert></div> : null}
+        {loading ? <Loading label="Loading active elections…" /> : null}
+        {!loading && options?.length === 0 ? (
+          <div className="mt-6">
+            <Alert tone="info">No election is currently open for accreditation or voting.</Alert>
+          </div>
+        ) : null}
+        {options && options.length > 1 ? (
+          <ElectionChooser elections={options} selectedId={selectedId} onSelect={choose} />
+        ) : null}
+        {!loading && options && options.length > 0 && !selectedId ? (
+          <div className="mt-5">
+            <Alert tone="info">Choose an election above to continue.</Alert>
+          </div>
+        ) : null}
+        {selectedId && !election && !choiceError ? <Loading label="Loading election…" /> : null}
 
         {election ? (
           <>
@@ -213,7 +232,7 @@ export default function AccreditPage() {
                     </div>
                   </dl>
                   <div className="flex flex-wrap gap-3">
-                    <Link href="/vote" className="btn-primary">
+                    <Link href={`/vote?election=${encodeURIComponent(election.id)}`} className="btn-primary">
                       Open my ballot
                     </Link>
                     <Link href="/verify" className="btn-outline">

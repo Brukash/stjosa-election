@@ -242,6 +242,8 @@ def public_election_payload(db: Session, election: Election) -> dict:
         "closes_at": election.closes_at.isoformat() if election.closes_at else None,
         "timezone": election.timezone,
         "voting_rules": election.voting_rules,
+        "can_accredit": election.status in {"accreditation_open", "voting_open"},
+        "can_vote": election.status == "voting_open",
         "verification": public_settings_dict(settings),
         "positions": [
             {

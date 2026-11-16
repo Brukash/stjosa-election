@@ -20,6 +20,8 @@ from ..security import ROLE_NAMES, PERMISSIONS
 
 router = APIRouter(prefix="/public", tags=["public"])
 
+ACTIVE_PUBLIC_STATUSES = ("accreditation_open", "voting_open")
+
 
 @router.get("/election")
 def current_election(db: Session = Depends(get_db)):
@@ -40,6 +42,37 @@ def election_by_id(election_id: str, db: Session = Depends(get_db)):
     election = resolve_public_election(db, election_id)
     maybe_auto_close(db, election)
     return public_election_payload(db, election)
+
+
+@router.get("/active-elections")
+def active_elections(db: Session = Depends(get_db)):
+    """Elections a member can currently accredit or vote in."""
+    rows = (
+        db.query(Election)
+        .filter(Election.status.in_(ACTIVE_PUBLIC_STATUSES))
+        .order_by(Election.created_at.desc())
+        .all()
+    )
+    for election in rows:
+        maybe_auto_close(db, election)
+    rows = [election for election in rows if election.status in ACTIVE_PUBLIC_STATUSES]
+    return {
+        "elections": [
+            {
+                "id": election.id,
+                "title": election.title,
+                "reference": election.reference,
+                "year": election.year,
+                "status": election.status,
+                "status_label": STATUS_LABELS.get(election.status, election.status),
+                "opens_at": election.opens_at.isoformat() if election.opens_at else None,
+                "closes_at": election.closes_at.isoformat() if election.closes_at else None,
+                "can_accredit": election.status in ACTIVE_PUBLIC_STATUSES,
+                "can_vote": election.status == "voting_open",
+            }
+            for election in rows
+        ]
+    }
 
 
 @router.get("/elections")
