@@ -23,6 +23,7 @@ export default function RegisterPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const profile = getProfile();
+  const isChairman = (profile?.roles ?? []).includes("chairman");
   const [data, setData] = useState<any | null>(null);
   const [csv, setCsv] = useState("");
   const [error, setError] = useState("");
@@ -30,6 +31,10 @@ export default function RegisterPage() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [voterForm, setVoterForm] = useState({ ...EMPTY_VOTER });
+  const [consentSelection, setConsentSelection] = useState<Set<string>>(new Set());
+  const [consentSource, setConsentSource] = useState("");
+  const [consentDate, setConsentDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [consentNote, setConsentNote] = useState("");
 
   function load() {
     api(`/api/register/${id}`, { auth: true })
@@ -172,6 +177,63 @@ export default function RegisterPage() {
     }
   }
 
+  function toggleConsentSelection(voterId: string, checked: boolean) {
+    setConsentSelection((current) => {
+      const next = new Set(current);
+      if (checked) next.add(voterId);
+      else next.delete(voterId);
+      return next;
+    });
+  }
+
+  function selectAllUnconsented() {
+    if (!data) return;
+    setConsentSelection(
+      new Set(
+        data.voters
+          .filter((voter: any) => voter.phone && !voter.whatsapp_consent)
+          .map((voter: any) => voter.id)
+      )
+    );
+  }
+
+  async function recordBulkConsent() {
+    if (!data || !consentSelection.size || !consentSource.trim() || !consentDate) return;
+    setBusy(true);
+    setError("");
+    setPopup(null);
+    try {
+      const result = await api(`/api/register/${id}/whatsapp-consent`, {
+        method: "POST",
+        auth: true,
+        body: JSON.stringify({
+          voter_ids: Array.from(consentSelection),
+          source: consentSource.trim(),
+          consent_date: consentDate,
+          note: consentNote.trim() || null,
+        }),
+      });
+      const skipped =
+        (result.skipped_already_consented ?? 0) +
+        (result.skipped_no_phone ?? 0) +
+        (result.skipped_unknown ?? 0);
+      setPopup({
+        title: "WhatsApp consent recorded",
+        message:
+          `${result.recorded} voter(s) now have WhatsApp consent recorded.` +
+          (skipped ? ` ${skipped} selected voter(s) were skipped.` : "") +
+          " No messages were sent.",
+      });
+      setConsentSelection(new Set<string>());
+      setConsentNote("");
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const voters = useMemo(() => {
     if (!data) return [];
     const needle = query.trim().toLowerCase();
@@ -189,6 +251,10 @@ export default function RegisterPage() {
   const approved = data.election.register_approved;
   const canImport = can(profile, "register.import");
   const canApprove = can(profile, "register.approve");
+  const registerLocked = Boolean(data.election.locked_at);
+  const unconsentedWithPhone = data.voters.filter(
+    (voter: any) => voter.phone && !voter.whatsapp_consent
+  );
 
   return (
     <div className="space-y-5">
@@ -313,6 +379,77 @@ export default function RegisterPage() {
         </Card>
       </div>
 
+      {isChairman && !registerLocked ? (
+        <Card className="card-pad">
+          <SectionHeading eyebrow="WhatsApp consent" title="Record consent for existing voters">
+            Select voters in the table, then record the source and date of their WhatsApp opt-in.
+            Each selected voter receives an individual audit entry.
+          </SectionHeading>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className="label">Consent source *</label>
+              <input
+                className="input"
+                value={consentSource}
+                onChange={(event) => setConsentSource(event.target.value)}
+                placeholder="Email reply, phone call, signed form"
+              />
+            </div>
+            <div>
+              <label className="label">Consent date *</label>
+              <input
+                type="date"
+                className="input"
+                value={consentDate}
+                max={new Date().toISOString().slice(0, 10)}
+                onChange={(event) => setConsentDate(event.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Audit note (optional)</label>
+              <input
+                className="input"
+                value={consentNote}
+                onChange={(event) => setConsentNote(event.target.value)}
+                placeholder="Reference or committee note"
+              />
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={recordBulkConsent}
+              disabled={busy || !consentSelection.size || !consentSource.trim() || !consentDate}
+            >
+              {busy
+                ? "Recording…"
+                : `Record consent for ${consentSelection.size} voter(s)`}
+            </button>
+            <button
+              type="button"
+              className="btn-outline"
+              onClick={selectAllUnconsented}
+              disabled={busy || unconsentedWithPhone.length === 0}
+            >
+              Select all unconsented ({unconsentedWithPhone.length})
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => setConsentSelection(new Set<string>())}
+              disabled={busy || !consentSelection.size}
+            >
+              Clear selection
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-ink/45">
+            This records consent only. It does not approve the register or send messages. Use a
+            source and date you can evidence if the consent is challenged.
+          </p>
+        </Card>
+      ) : null}
+
       {canImport ? (
         <Card className="card-pad">
           <SectionHeading eyebrow="Single registration" title="Register one voter">
@@ -425,6 +562,7 @@ export default function RegisterPage() {
           <table className="table">
             <thead>
               <tr>
+                {isChairman && !registerLocked ? <th>Select</th> : null}
                 <th>Voter ID</th>
                 <th>Name</th>
                 <th>Alumni set</th>
@@ -437,6 +575,21 @@ export default function RegisterPage() {
             <tbody>
               {voters.map((voter: any) => (
                 <tr key={voter.id}>
+                  {isChairman && !registerLocked ? (
+                    <td>
+                      {voter.phone && !voter.whatsapp_consent ? (
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 accent-green"
+                          checked={consentSelection.has(voter.id)}
+                          onChange={(event) =>
+                            toggleConsentSelection(voter.id, event.target.checked)
+                          }
+                          aria-label={`Select ${voter.full_name} for WhatsApp consent`}
+                        />
+                      ) : null}
+                    </td>
+                  ) : null}
                   <td className="font-mono text-xs">{voter.voter_id}</td>
                   <td>
                     <span className="font-medium text-ink">{voter.full_name}</span>
@@ -455,7 +608,7 @@ export default function RegisterPage() {
                     ) : (
                       <span className="pill-grey">No consent</span>
                     )}
-                    {canApprove && voter.phone ? (
+                    {canApprove && !registerLocked && voter.phone ? (
                       <button
                         className="ml-2 text-[10px] font-semibold text-ink/45 underline hover:text-ink"
                         onClick={() => toggleWhatsappConsent(voter)}

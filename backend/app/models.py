@@ -177,7 +177,7 @@ class OtpChallenge(Base):
 
 
 class NotificationDelivery(Base):
-    """OTP and registration-notice delivery audit. Never contains a code."""
+    """OTP, registration-notice and vote-confirmation delivery audit. No codes or selections."""
 
     __tablename__ = "notification_deliveries"
 

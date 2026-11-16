@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -27,6 +27,7 @@ from ..models import (
     SpentCredential,
     Voter,
 )
+from ..notifications import notify_vote_submitted_by_id
 from ..receipts import receipt_payload
 from ..schemas import BallotPrepare, CredentialProof
 from ..services import ensure_voting_window, get_election, get_settings_row, now
@@ -223,6 +224,7 @@ def cast_ballot(
     prepared_id: str,
     payload: CredentialProof,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     prepared = db.get(PreparedBallot, prepared_id)
@@ -306,7 +308,8 @@ def cast_ballot(
         )
     )
     db.add(SpentCredential(election_id=election.id, token_hash=digest))
-    voter.has_voted_at = now()
+    voted_at = now()
+    voter.has_voted_at = voted_at
     voter.turnout_token_hash = None
     receipt = _issue_receipt(db, election, ballot, prepared)
 
@@ -339,6 +342,15 @@ def cast_ballot(
         raise HTTPException(status.HTTP_409_CONFLICT, "This voting credential has already been used")
 
     db.refresh(receipt)
+    # Confirmation runs after the response is sent. Slow or failing providers
+    # therefore cannot delay or invalidate an accepted ballot.
+    background_tasks.add_task(
+        notify_vote_submitted_by_id,
+        election_id=election.id,
+        voter_id=voter.id,
+        submitted_at=voted_at,
+        request_ip=client_ip(request),
+    )
     return receipt_payload(election, receipt, verification_enabled=settings_row.ballot_inclusion_enabled)
 
 

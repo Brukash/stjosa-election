@@ -35,6 +35,8 @@ os.environ.update(
         "WHATSAPP_API_BASE": "http://127.0.0.1:8899",
         "WHATSAPP_REGISTRATION_TEMPLATE_NAME": "sjc_registration_confirmation",
         "WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE": "en_US",
+        "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME": "sjc_vote_confirmation",
+        "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE": "en_US",
         "WHATSAPP_APP_SECRET": "test-app-secret",
         "WHATSAPP_VERIFY_TOKEN": "test-verify-token",
         "DEMO_SEED": "true",
@@ -274,6 +276,7 @@ def main() -> None:
         readiness = delivery_settings.json()
         assert "otp" not in readiness
         assert readiness["whatsapp"]["registration_template_name"] == "sjc_registration_confirmation"
+        assert readiness["whatsapp"]["vote_confirmation_template_name"] == "sjc_vote_confirmation"
         assert all(
             provider["configured"]
             for provider in readiness["providers"]
@@ -339,10 +342,27 @@ def main() -> None:
             json={"token": credential["token"], "signature": credential["signature"]},
         )
         assert missing_turnout.status_code == 401, missing_turnout.text
+        cast_start = len(CAPTURED)
         cast = client.post(
             f"/api/voting/{prepared['prepared_id']}/cast", json=credential
         )
         assert cast.status_code == 200, cast.text
+        cast_calls = CAPTURED[cast_start:]
+        assert len(cast_calls) == 2, [call["path"] for call in cast_calls]
+        vote_email = json.loads(
+            next(call for call in cast_calls if call["path"] == "/emails")["body"]
+        )
+        vote_whatsapp = json.loads(
+            next(call for call in cast_calls if call["path"] == "/123456789/messages")["body"]
+        )
+        assert "submitted successfully" in vote_email["subject"], vote_email["subject"]
+        assert "submitted successfully" in vote_email["text"], vote_email["text"]
+        assert "does not include your candidate selections" in vote_email["text"]
+        assert vote_whatsapp["template"]["name"] == "sjc_vote_confirmation"
+        wa_vote_params = vote_whatsapp["template"]["components"][0]["parameters"]
+        assert len(wa_vote_params) == 3, wa_vote_params
+        assert all(item["type"] == "text" and item["text"] for item in wa_vote_params)
+        ok("a cast sends email and WhatsApp submission confirmations without selections")
 
         with SessionLocal() as db:
             voted_voter = db.execute(
@@ -350,6 +370,24 @@ def main() -> None:
             ).scalar_one()
             assert voted_voter.has_voted_at is not None
             assert voted_voter.turnout_token_hash is None
+            confirmation_rows = db.execute(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.election_id == election_id,
+                    NotificationDelivery.purpose == "vote_confirmation",
+                )
+            ).scalars().all()
+            assert len(confirmation_rows) == 2, confirmation_rows
+            assert {row.channel for row in confirmation_rows} == {"email", "whatsapp"}
+            assert all(row.status == "sent" and row.challenge_id is None for row in confirmation_rows)
+        ok("vote confirmation deliveries are recorded separately per channel")
+
+        replay_start = len(CAPTURED)
+        replay = client.post(
+            f"/api/voting/{prepared['prepared_id']}/cast", json=credential
+        )
+        assert replay.status_code == 200, replay.text
+        assert len(CAPTURED) == replay_start, "idempotent cast replay resent a confirmation"
+        ok("an idempotent cast replay does not resend vote confirmations")
 
         report = client.get(
             f"/api/monitoring/{election_id}/overview", headers=super_headers

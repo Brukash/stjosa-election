@@ -1,7 +1,7 @@
 """Pydantic request/response models."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -130,6 +130,13 @@ class EligibilityUpdate(BaseModel):
     is_eligible: bool | None = None
     whatsapp_consent: bool | None = None
     note: str | None = None
+
+
+class WhatsAppConsentBulk(BaseModel):
+    voter_ids: list[str] = Field(min_length=1, max_length=500)
+    source: str = Field(min_length=1, max_length=120)
+    consent_date: date
+    note: str | None = Field(default=None, max_length=500)
 
 
 class VoterVerifyRequest(BaseModel):

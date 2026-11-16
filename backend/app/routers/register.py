@@ -12,7 +12,7 @@ from ..db import get_db
 from ..deps import client_ip, record_audit, require_permission, roles_for
 from ..models import AccreditationRecord, Election, ElectionEvent, Profile, Voter
 from ..notifications import notify_registered_voters
-from ..schemas import EligibilityUpdate, RegisterImport, VoterCreate
+from ..schemas import EligibilityUpdate, RegisterImport, VoterCreate, WhatsAppConsentBulk
 from ..services import election_stats, get_election
 
 router = APIRouter(prefix="/register", tags=["register"])
@@ -55,7 +55,8 @@ def list_register(
     }
     return {
         "election": {"id": election.id, "title": election.title, "status": election.status,
-                     "register_approved": all(v.register_status == "approved" for v in voters) if voters else False},
+                     "register_approved": all(v.register_status == "approved" for v in voters) if voters else False,
+                     "locked_at": election.locked_at.isoformat() if election.locked_at else None},
         "stats": election_stats(db, election.id),
         "voters": [_voter_dict(v, v.id in accredited_ids) for v in voters],
     }
@@ -198,6 +199,86 @@ def update_eligibility(
                          "whatsapp_consent": payload.whatsapp_consent, "note": payload.note})
     db.commit()
     return _voter_dict(voter, False)
+
+
+@router.post("/{election_id}/whatsapp-consent")
+def bulk_whatsapp_consent(
+    election_id: str,
+    payload: WhatsAppConsentBulk,
+    request: Request,
+    profile: Profile = Depends(require_permission("register.approve")),
+    db: Session = Depends(get_db),
+):
+    """Record consented WhatsApp numbers in bulk, with one audited source/date per voter."""
+    election = get_election(db, election_id)
+    if "chairman" not in roles_for(db, profile.id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the Chairman can record bulk WhatsApp consent",
+        )
+    if election.locked_at:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The register is locked: voting has begun")
+
+    source = payload.source.strip()
+    if not source:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Consent source is required")
+    requested_ids = list(dict.fromkeys(payload.voter_ids))
+    voters = db.execute(
+        select(Voter).where(
+            Voter.election_id == election.id,
+            Voter.id.in_(requested_ids),
+        )
+    ).scalars().all()
+    by_id = {voter.id: voter for voter in voters}
+
+    recorded = 0
+    skipped_already_consented = 0
+    skipped_no_phone = 0
+    skipped_unknown = 0
+    note = (payload.note or "").strip() or None
+    audit_note = (
+        f"WhatsApp consent source: {source}; consent date: {payload.consent_date.isoformat()}."
+    )
+    if note:
+        audit_note = f"{audit_note} {note}"
+    for voter_id in requested_ids:
+        voter = by_id.get(voter_id)
+        if not voter:
+            skipped_unknown += 1
+            continue
+        if not (voter.phone or "").strip():
+            skipped_no_phone += 1
+            continue
+        if voter.whatsapp_consent:
+            skipped_already_consented += 1
+            continue
+        voter.whatsapp_consent = True
+        record_audit(
+            db,
+            action="register.consent",
+            election_id=election.id,
+            actor_id=profile.id,
+            actor_role="chairman",
+            entity="voter",
+            entity_id=voter.id,
+            ip_address=client_ip(request),
+            detail={
+                "whatsapp_consent": True,
+                "consent_source": source,
+                "consent_date": payload.consent_date.isoformat(),
+                "note": audit_note,
+            },
+        )
+        recorded += 1
+
+    if recorded:
+        db.commit()
+    return {
+        "recorded": recorded,
+        "skipped_already_consented": skipped_already_consented,
+        "skipped_no_phone": skipped_no_phone,
+        "skipped_unknown": skipped_unknown,
+    }
 
 
 @router.post("/{election_id}/approve")

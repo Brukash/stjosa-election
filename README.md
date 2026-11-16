@@ -123,6 +123,7 @@ When the Chairman approves the register, every eligible voter receives a registr
 | Email | Resend | `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM` (verified domain) |
 | Email | Any SMTP relay | `EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` |
 | WhatsApp registration notices | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_REGISTRATION_TEMPLATE_NAME`, `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE` |
+| WhatsApp vote confirmations | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME`, `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE` |
 | WhatsApp status webhook | Meta | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` |
 
 Successful channels are timestamped on the voter (`registration_email_sent_at`,
@@ -131,6 +132,17 @@ succeeded, so repeated approval does not spam members. Approval is committed bef
 and a provider failure never cancels the approval or the other channel. Delivery attempts are recorded
 in `notification_deliveries` with `purpose="registration"`; message contents and full contacts are not
 stored.
+
+After a ballot is accepted, the voter also receives a confirmation by email and, where recorded
+`whatsapp_consent` is present, by WhatsApp. The message says the ballot was received and submitted
+successfully, includes the election title and submission time, and never includes the voter's
+selections. Email is sent only when an address and provider are configured; WhatsApp uses the
+separate approved **Utility** template `sjc_vote_confirmation` with `{{1}}` voter name, `{{2}}`
+election title and `{{3}}` submission time. Confirmation delivery is best effort: a provider failure
+never invalidates or fails the accepted vote, and it runs after the cast response has been sent so a
+slow provider cannot delay the voter. Idempotent cast retries do not resend messages. Delivery
+attempts are recorded with `purpose="vote_confirmation"`. Each confirmation provider attempt is
+limited by `VOTE_CONFIRMATION_TIMEOUT_SECONDS` (default 4 seconds) and is not retried.
 
 Run the delivery and accreditation tests without real credentials:
 

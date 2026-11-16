@@ -1,4 +1,4 @@
-"""OTP and registration-notice delivery over email, SMS and WhatsApp.
+"""OTP, registration-notice and vote-confirmation delivery over email, SMS and WhatsApp.
 
 Security rules enforced here:
   * The OTP is sent to the contact on the approved register, never to a value
@@ -20,13 +20,16 @@ import smtplib
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .db import SessionLocal
 from .models import Election, NotificationDelivery, Voter
 from .services import now
 
@@ -224,6 +227,9 @@ def provider_status() -> list[dict]:
             "registration_template": settings.whatsapp_registration_template_name,
             "registration_template_language": settings.whatsapp_registration_template_language,
             "registration_configured": settings.whatsapp_registration_configured,
+            "vote_confirmation_template": settings.whatsapp_vote_confirmation_template_name,
+            "vote_confirmation_template_language": settings.whatsapp_vote_confirmation_template_language,
+            "vote_confirmation_configured": settings.whatsapp_vote_confirmation_configured,
             "consent_required": True,
             "delivery_status_webhook": {
                 "url": f"{settings.api_origin}/api/webhooks/whatsapp",
@@ -298,9 +304,11 @@ def _sms_body(election: Election, otp: str) -> str:
 
 
 # ── providers ───────────────────────────────────────────────────────────────
-def _post_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
+def _post_with_retry(
+    client: httpx.Client, url: str, *, attempts: int = 2, **kwargs
+) -> httpx.Response:
     last_error: Exception | None = None
-    for attempt in range(2):
+    for attempt in range(max(1, attempts)):
         try:
             response = client.post(url, **kwargs)
             if response.status_code < 300 or response.status_code not in RETRYABLE_STATUS:
@@ -310,12 +318,19 @@ def _post_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response
             )
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             last_error = exc
-        time.sleep(0.4 * (attempt + 1))
+        if attempt + 1 < attempts:
+            time.sleep(0.4 * (attempt + 1))
     raise last_error or RuntimeError("delivery failed")
 
 
 def _send_resend(
-    destination: str, subject: str, text_body: str, html_body: str | None = None
+    destination: str,
+    subject: str,
+    text_body: str,
+    html_body: str | None = None,
+    *,
+    timeout_seconds: int | None = None,
+    attempts: int = 2,
 ) -> tuple[str | None, str | None]:
     payload = {
         "from": settings.email_from,
@@ -329,8 +344,15 @@ def _send_resend(
         "Authorization": f"Bearer {settings.resend_api_key}",
         "Content-Type": "application/json",
     }
-    with httpx.Client(timeout=settings.otp_delivery_timeout_seconds) as client:
-        response = _post_with_retry(client, f"{settings.email_api_base}/emails", json=payload, headers=headers)
+    timeout = timeout_seconds or settings.otp_delivery_timeout_seconds
+    with httpx.Client(timeout=timeout) as client:
+        response = _post_with_retry(
+            client,
+            f"{settings.email_api_base}/emails",
+            attempts=attempts,
+            json=payload,
+            headers=headers,
+        )
     if response.status_code >= 300:
         return None, f"email provider rejected the message ({response.status_code})"
     try:
@@ -342,7 +364,13 @@ def _send_resend(
         return None, "email provider returned an invalid response"
 
 
-def _send_smtp(destination: str, subject: str, body: str) -> tuple[str | None, str | None]:
+def _send_smtp(
+    destination: str,
+    subject: str,
+    body: str,
+    *,
+    timeout_seconds: int | None = None,
+) -> tuple[str | None, str | None]:
     message = EmailMessage()
     display_name, address = parseaddr(settings.email_from)
     message["From"] = formataddr((display_name or "SJC Alumni Election", address or settings.email_from))
@@ -350,7 +378,8 @@ def _send_smtp(destination: str, subject: str, body: str) -> tuple[str | None, s
     message["Subject"] = subject
     message.set_content(body)
     try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=settings.otp_delivery_timeout_seconds) as server:
+        timeout = timeout_seconds or settings.otp_delivery_timeout_seconds
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=timeout) as server:
             server.ehlo()
             if settings.smtp_starttls:
                 server.starttls()
@@ -515,15 +544,23 @@ def _send_registration_email(voter: Voter, election: Election) -> DeliveryResult
     )
 
 
-def _send_registration_whatsapp(
-    voter: Voter, election: Election, destination: str
+def send_registration_whatsapp(
+    *,
+    voter_name: str,
+    voter_id: str,
+    election_title: str,
+    destination: str,
 ) -> DeliveryResult:
-    """Send the approved registration utility template through Meta Cloud API."""
+    """Send the approved registration utility template through Meta Cloud API.
+
+    This is the single payload builder used by register approval and the local
+    delivery test, so both send exactly the same template and parameters.
+    """
     to = "".join(ch for ch in destination if ch.isdigit())
     parameters = [
-        {"type": "text", "text": voter.full_name},
-        {"type": "text", "text": election.title},
-        {"type": "text", "text": voter.voter_id},
+        {"type": "text", "text": voter_name},
+        {"type": "text", "text": election_title},
+        {"type": "text", "text": voter_id},
     ]
     payload = {
         "messaging_product": "whatsapp",
@@ -559,6 +596,18 @@ def _send_registration_whatsapp(
         recipient_masked=mask_phone(destination),
         provider_message_id=message_id,
         error=error,
+    )
+
+
+def _send_registration_whatsapp(
+    voter: Voter, election: Election, destination: str
+) -> DeliveryResult:
+    """Registration-notice adapter for the shared WhatsApp payload."""
+    return send_registration_whatsapp(
+        voter_name=voter.full_name,
+        voter_id=voter.voter_id,
+        election_title=election.title,
+        destination=destination,
     )
 
 
@@ -659,6 +708,295 @@ def notify_registered_voters(
             )
     db.commit()
     return summary
+
+
+# ── vote-submitted confirmations ──────────────────────────────────────────────
+def _vote_submitted_label(election: Election, submitted_at: datetime) -> str:
+    """Render the submission time in the election's configured timezone."""
+    moment = submitted_at
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    try:
+        local = moment.astimezone(ZoneInfo(election.timezone or "Africa/Lagos"))
+    except Exception:
+        local = moment.astimezone(timezone.utc)
+        return local.strftime("%d %b %Y at %I:%M %p UTC")
+    return local.strftime("%d %b %Y at %I:%M %p %Z")
+
+
+def _vote_confirmation_email_body(
+    *,
+    election_title: str,
+    election_reference: str,
+    voter_name: str,
+    voter_id: str,
+    submitted_label: str,
+) -> tuple[str, str, str]:
+    subject = f"Your ballot was submitted successfully — {election_reference}"
+    text = (
+        f"Dear {voter_name},\n\n"
+        f"Your ballot for {election_title} was received and submitted successfully at "
+        f"{submitted_label}.\n\n"
+        f"Your vote has been recorded. This confirmation does not include your candidate "
+        f"selections.\n\n"
+        f"Election reference: {election_reference}\n"
+        f"Voter ID: {voter_id}\n\n"
+        f"If you did not submit this ballot, contact the Electoral Committee immediately.\n\n"
+        f"St. John's College Jos Alumni Election"
+    )
+    html_body = f"""<!doctype html><html><body style="margin:0;background:#F4F6F2;font-family:Arial,sans-serif;color:#1E2A22">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#fff;border-radius:12px;overflow:hidden">
+<tr><td style="background:#0F3D2E;padding:22px 26px;color:#fff;font-size:18px;font-weight:700">St. John's College Jos Alumni Election</td></tr>
+<tr><td style="height:5px;background:#E7D21C;font-size:0;line-height:0">&nbsp;</td></tr>
+<tr><td style="padding:26px">
+<p style="margin:0 0 12px;font-size:15px">Dear {html.escape(voter_name)},</p>
+<p style="margin:0 0 12px;font-size:14px;line-height:1.6">Your ballot for <strong>{html.escape(election_title)}</strong> was received and submitted successfully at <strong>{html.escape(submitted_label)}</strong>.</p>
+<p style="margin:0 0 18px;font-size:14px;line-height:1.6">Your vote has been recorded. This confirmation does not include your candidate selections.</p>
+<p style="margin:0 0 18px;font-size:13px;color:#55635A">Election reference: {html.escape(election_reference)}<br>Voter ID: {html.escape(voter_id)}</p>
+<p style="margin:0;font-size:13px;color:#55635A">If you did not submit this ballot, contact the Electoral Committee immediately.</p>
+</td></tr>
+<tr><td style="background:#EEF4EC;padding:16px 26px;font-size:11px;color:#55635A">This message never contains or reveals your ballot choices.</td></tr>
+</table></td></tr></table></body></html>"""
+    return subject, text, html_body
+
+
+def _send_vote_confirmation_email(
+    destination: str,
+    *,
+    election_title: str,
+    election_reference: str,
+    voter_name: str,
+    voter_id: str,
+    submitted_label: str,
+) -> DeliveryResult:
+    provider = _email_provider()
+    try:
+        subject, text, html_body = _vote_confirmation_email_body(
+            election_title=election_title,
+            election_reference=election_reference,
+            voter_name=voter_name,
+            voter_id=voter_id,
+            submitted_label=submitted_label,
+        )
+        if provider == "smtp":
+            message_id, error = _send_smtp(
+                destination,
+                subject,
+                text,
+                timeout_seconds=settings.vote_confirmation_timeout_seconds,
+            )
+        elif provider == "resend":
+            message_id, error = _send_resend(
+                destination,
+                subject,
+                text,
+                html_body,
+                timeout_seconds=settings.vote_confirmation_timeout_seconds,
+                attempts=1,
+            )
+        else:
+            message_id, error = None, "email provider is not configured"
+    except Exception as exc:
+        message_id, error = None, f"email delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="email",
+        provider=provider or "none",
+        status="failed" if error else "sent",
+        recipient_masked=mask_email(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
+
+
+def send_vote_confirmation_whatsapp(
+    *,
+    voter_name: str,
+    election_title: str,
+    submitted_label: str,
+    destination: str,
+) -> DeliveryResult:
+    """Send the approved vote-confirmation utility template via Meta Cloud API."""
+    to = "".join(ch for ch in destination if ch.isdigit())
+    parameters = [
+        {"type": "text", "text": voter_name},
+        {"type": "text", "text": election_title},
+        {"type": "text", "text": submitted_label},
+    ]
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": settings.whatsapp_vote_confirmation_template_name,
+            "language": {"code": settings.whatsapp_vote_confirmation_template_language},
+            "components": [{"type": "body", "parameters": parameters}],
+        },
+    }
+    url = f"{settings.whatsapp_api_base}/{settings.whatsapp_phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {settings.whatsapp_access_token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        with httpx.Client(timeout=settings.vote_confirmation_timeout_seconds) as client:
+            response = _post_with_retry(
+                client, url, attempts=1, json=payload, headers=headers
+            )
+        if response.status_code >= 300:
+            message_id, error = None, f"whatsapp provider rejected the message ({response.status_code})"
+        else:
+            messages = response.json().get("messages") or []
+            message_id = str(messages[0].get("id") or "") if messages else ""
+            error = None if message_id else "whatsapp provider did not confirm a message id"
+    except Exception as exc:
+        message_id, error = None, f"whatsapp delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="whatsapp",
+        provider="meta",
+        status="failed" if error else "sent",
+        recipient_masked=mask_phone(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
+
+
+def notify_vote_submitted(
+    db: Session,
+    *,
+    election: Election,
+    voter: Voter,
+    submitted_at: datetime,
+    request_ip: str | None = None,
+) -> dict:
+    """Confirm an accepted ballot by email and WhatsApp without ballot choices.
+
+    The ballot has already been committed when this runs. Delivery failure is
+    recorded but never rolls back or invalidates the vote. WhatsApp requires a
+    recorded opt-in; email uses the address on the approved register.
+    """
+    summary = {
+        "email_sent": 0,
+        "email_failed": 0,
+        "email_unavailable": 0,
+        "whatsapp_sent": 0,
+        "whatsapp_failed": 0,
+        "whatsapp_unavailable": 0,
+        "whatsapp_no_consent": 0,
+    }
+    voter_row_id = voter.id
+    voter_name = voter.full_name
+    voter_id = voter.voter_id
+    email = (voter.email or "").strip()
+    phone = _normalise_phone(voter.phone or "")
+    submitted_label = _vote_submitted_label(election, submitted_at)
+    attempts: list[tuple[str, str]] = []
+
+    if not email or not settings.email_configured:
+        summary["email_unavailable"] += 1
+    else:
+        attempts.append(("email", email))
+
+    if not voter.whatsapp_consent:
+        summary["whatsapp_no_consent"] += 1
+    elif not phone or not settings.whatsapp_vote_confirmation_configured:
+        summary["whatsapp_unavailable"] += 1
+    else:
+        attempts.append(("whatsapp", phone))
+
+    if not attempts:
+        return summary
+
+    with ThreadPoolExecutor(max_workers=len(attempts)) as executor:
+        futures = {}
+        for channel, destination in attempts:
+            if channel == "email":
+                futures[
+                    executor.submit(
+                        _send_vote_confirmation_email,
+                        destination,
+                        election_title=election.title,
+                        election_reference=election.reference,
+                        voter_name=voter_name,
+                        voter_id=voter_id,
+                        submitted_label=submitted_label,
+                    )
+                ] = channel
+            else:
+                futures[
+                    executor.submit(
+                        send_vote_confirmation_whatsapp,
+                        voter_name=voter_name,
+                        election_title=election.title,
+                        submitted_label=submitted_label,
+                        destination=destination,
+                    )
+                ] = channel
+        for future, channel in futures.items():
+            try:
+                result = future.result()
+            except Exception as exc:
+                result = DeliveryResult(
+                    channel=channel,
+                    provider="unknown",
+                    status="failed",
+                    recipient_masked="***",
+                    error=f"notification worker failed ({type(exc).__name__})",
+                )
+            if result.status == "sent":
+                summary[f"{channel}_sent"] += 1
+            else:
+                summary[f"{channel}_failed"] += 1
+            db.add(
+                NotificationDelivery(
+                    election_id=election.id,
+                    voter_row_id=voter_row_id,
+                    challenge_id=None,
+                    purpose="vote_confirmation",
+                    channel=result.channel,
+                    provider=result.provider,
+                    status=result.status,
+                    recipient_masked=result.recipient_masked,
+                    provider_message_id=result.provider_message_id,
+                    error=(result.error or "")[:300] or None,
+                    request_ip=request_ip,
+                )
+            )
+    db.commit()
+    return summary
+
+
+def notify_vote_submitted_by_id(
+    *,
+    election_id: str,
+    voter_id: str,
+    submitted_at: datetime,
+    request_ip: str | None = None,
+) -> None:
+    """Background entry point for post-cast confirmations.
+
+    FastAPI runs this after the cast response has been sent. A fresh session is
+    used because the request-scoped session is closed when the route returns;
+    provider errors are swallowed here so they cannot affect the voter's cast.
+    """
+    db = SessionLocal()
+    try:
+        election = db.get(Election, election_id)
+        voter = db.get(Voter, voter_id)
+        if not election or not voter:
+            return
+        notify_vote_submitted(
+            db,
+            election=election,
+            voter=voter,
+            submitted_at=submitted_at,
+            request_ip=request_ip,
+        )
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 
 # ── entry point ─────────────────────────────────────────────────────────────

@@ -28,6 +28,8 @@ def delivery_settings(profile: Profile = Depends(require_permission("technical.s
             "consent_required": True,
             "registration_template_name": settings.whatsapp_registration_template_name,
             "registration_template_language": settings.whatsapp_registration_template_language,
+            "vote_confirmation_template_name": settings.whatsapp_vote_confirmation_template_name,
+            "vote_confirmation_template_language": settings.whatsapp_vote_confirmation_template_language,
             "webhook_url": f"{settings.api_origin}/api/webhooks/whatsapp",
             "webhook_signed": bool(settings.whatsapp_app_secret),
         },

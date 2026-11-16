@@ -53,6 +53,14 @@ The turnout token is required and proves the voter's private turnout marker with
 to the anonymous ballot. It is written only after the ballot is accepted. Repeating a cast for the
 same prepared ballot returns the same receipt (no duplicate ballot).
 
+After an accepted cast, the API schedules a best-effort confirmation to the voter's registered email
+and, with recorded WhatsApp consent, the approved vote-confirmation utility template. It runs after
+the cast response is sent, so provider latency cannot delay the voter. The confirmation contains the
+election title and submission time only; it never contains selections, the receipt reference or a
+ballot link. Delivery failures do not change or fail the cast, and idempotent replays do not resend
+confirmations. Each provider attempt is capped by `VOTE_CONFIRMATION_TIMEOUT_SECONDS` (default 4
+seconds) and is not retried.
+
 Challenge response `verification_material` contains: ciphertext, encrypted key, nonce, revealed data
 key, key commitment, ballot commitment and the revealed selections. The voter's browser checks that
 the AES-GCM ciphertext decrypts to those selections and that both commitments match.
@@ -110,6 +118,7 @@ accreditation_open`, `accreditation_open → voting_open`, `voting_open → voti
 | POST | `/register/{election_id}/import` | `register.import` |
 | POST | `/register/{election_id}/voters` | `register.import` |
 | PATCH | `/register/voters/{voter_id}` | `register.approve` |
+| POST | `/register/{election_id}/whatsapp-consent` | Chairman (`register.approve`) |
 | POST | `/register/{election_id}/approve` | `register.approve` |
 | GET | `/accreditation/exceptions/accreditations` | `accreditation.oversight` |
 | POST | `/accreditation/exceptions/reset-issuance` | `accreditation.manage` (audited) |

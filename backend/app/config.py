@@ -98,10 +98,21 @@ class Settings:
     whatsapp_registration_template_language: str = os.getenv(
         "WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE", "en_US"
     )
+    # Vote-submitted confirmations use their own Utility template. Parameters:
+    # {{1}} voter name, {{2}} election title, {{3}} submission time.
+    whatsapp_vote_confirmation_template_name: str = os.getenv(
+        "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME", "sjc_vote_confirmation"
+    )
+    whatsapp_vote_confirmation_template_language: str = os.getenv(
+        "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE", "en_US"
+    )
     whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "")
     whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
 
     otp_delivery_timeout_seconds: int = _int("OTP_DELIVERY_TIMEOUT_SECONDS", 10)
+    # Post-cast confirmations run in the background and are not retried; keep
+    # a short per-provider budget so a stalled provider cannot hold a worker.
+    vote_confirmation_timeout_seconds: int = _int("VOTE_CONFIRMATION_TIMEOUT_SECONDS", 4)
 
     seed_password: str = os.getenv("SEED_DEFAULT_PASSWORD", "ChangeMe!2026")
     keys_dir: Path = Path(os.getenv("KEYS_DIR", str(BASE_DIR / "keys")))
@@ -167,6 +178,15 @@ class Settings:
             and self.whatsapp_access_token
             and self.whatsapp_phone_number_id
             and self.whatsapp_registration_template_name
+        )
+
+    @property
+    def whatsapp_vote_confirmation_configured(self) -> bool:
+        return bool(
+            self.whatsapp_provider.strip().lower() == "meta"
+            and self.whatsapp_access_token
+            and self.whatsapp_phone_number_id
+            and self.whatsapp_vote_confirmation_template_name
         )
 
     @property

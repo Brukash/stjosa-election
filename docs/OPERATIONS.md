@@ -81,16 +81,36 @@ column and remains part of the schema history. Registration notices use
 2. Create an approved **Utility** template (for example `sjc_registration_confirmation`, language
    `en_US`) whose body uses three parameters in this order: `{{1}}` voter full name, `{{2}}` election
    title and `{{3}}` Voter ID. This is not an authentication/OTP template.
-3. Set `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
-   `WHATSAPP_REGISTRATION_TEMPLATE_NAME` and `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE`. Keep the
-   token in the server-side environment/secret store only.
-4. Record each voter's `whatsapp_consent` in the register CSV/import or via the register screen.
+3. Create a second approved **Utility** template (for example `sjc_vote_confirmation`, language
+   `en_US`) for the post-vote confirmation. Its body uses three parameters in this order: `{{1}}`
+   voter full name, `{{2}}` election title and `{{3}}` submission time. It must say the ballot was
+   received and submitted successfully and must not request or reveal selections.
+4. Set `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
+   `WHATSAPP_REGISTRATION_TEMPLATE_NAME`, `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE`,
+   `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME` and `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE`.
+   Keep the token in the server-side environment/secret store only.
+5. Record each voter's `whatsapp_consent` in the register CSV/import or via the register screen.
    WhatsApp is reported as unavailable and skipped without consent; email still proceeds.
-5. Set `WHATSAPP_APP_SECRET` and `WHATSAPP_VERIFY_TOKEN`, then subscribe the Meta app to
+6. Set `WHATSAPP_APP_SECRET` and `WHATSAPP_VERIFY_TOKEN`, then subscribe the Meta app to
    `https://<api-host>/api/webhooks/whatsapp`. Signed delivery/read/failure callbacks update
    `notification_deliveries`; message contents are not stored.
-6. Send a test utility template to a consented committee number and confirm delivery before the
-   election. The Super Administrator can inspect readiness at `/admin/delivery`.
+7. Send a test registration and vote-confirmation template to a consented committee number and
+   confirm delivery before the election. The Super Administrator can inspect readiness at
+   `/admin/delivery`.
+
+### Local WhatsApp registration-delivery test
+
+To send one registration notice without approving the register or writing voter/delivery records:
+
+```bash
+cd backend
+.venv/Scripts/python.exe scripts/test_whatsapp_registration.py --to +2348012345678 --consented
+```
+
+`--consented` is required and must only be passed after confirming the destination has a recorded
+WhatsApp opt-in. The command reads `WHATSAPP_*` from the environment or `backend/.env`, reuses the
+exact registration-notice payload, and prints only the template, masked recipient and provider
+message id. It opens no database session and sends one real billable message.
 
 ### Production guard and preflight
 
