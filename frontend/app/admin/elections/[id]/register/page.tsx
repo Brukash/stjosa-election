@@ -26,7 +26,7 @@ export default function RegisterPage() {
   const [data, setData] = useState<any | null>(null);
   const [csv, setCsv] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [popup, setPopup] = useState<{ title: string; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [voterForm, setVoterForm] = useState({ ...EMPTY_VOTER });
@@ -39,21 +39,32 @@ export default function RegisterPage() {
 
   useEffect(load, [id]);
 
+  useEffect(() => {
+    if (!popup) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPopup(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [popup]);
+
   async function importCsv(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
-    setNotice("");
+    setPopup(null);
     try {
       const result = await api(`/api/register/${id}/import`, {
         method: "POST",
         auth: true,
         body: JSON.stringify({ csv_text: csv }),
       });
-      setNotice(
-        `${result.added} record(s) imported, ${result.skipped_duplicates} duplicate(s) skipped. ` +
-          (result.errors?.length ? `${result.errors.length} row error(s).` : "")
-      );
+      setPopup({
+        title: "Register imported",
+        message:
+          `${result.added} record(s) imported, ${result.skipped_duplicates} duplicate(s) skipped. ` +
+          (result.errors?.length ? `${result.errors.length} row error(s).` : ""),
+      });
       setCsv("");
       load();
     } catch (err: any) {
@@ -67,7 +78,7 @@ export default function RegisterPage() {
     event.preventDefault();
     setBusy(true);
     setError("");
-    setNotice("");
+    setPopup(null);
     try {
       const created = await api(`/api/register/${id}/voters`, {
         method: "POST",
@@ -85,10 +96,12 @@ export default function RegisterPage() {
           is_eligible: voterForm.is_eligible,
         }),
       });
-      setNotice(
-        `${created.full_name} (${created.voter_id}) was added to the register. ` +
-          "New records require register approval before accreditation."
-      );
+      setPopup({
+        title: "Voter added",
+        message:
+          `${created.full_name} (${created.voter_id}) was added to the register. ` +
+          "New records require register approval before accreditation.",
+      });
       setVoterForm({ ...EMPTY_VOTER });
       load();
     } catch (err: any) {
@@ -111,7 +124,10 @@ export default function RegisterPage() {
           `${(n.whatsapp_unavailable ?? 0) + (n.whatsapp_no_consent ?? 0)} unavailable.`
         : "";
       if (n?.error) setError(`Register approved, but ${n.error}.`);
-      setNotice(`${result.approved} voter(s) approved; ${result.excluded} excluded.${delivery}`);
+      setPopup({
+        title: "Register approved",
+        message: `${result.approved} voter(s) approved; ${result.excluded} excluded.${delivery}`,
+      });
       load();
     } catch (err: any) {
       setError(err.message);
@@ -177,7 +193,46 @@ export default function RegisterPage() {
   return (
     <div className="space-y-5">
       {error ? <Alert tone="error">{error}</Alert> : null}
-      {notice ? <Alert tone="success">{notice}</Alert> : null}
+
+      {popup ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 backdrop-blur-sm"
+          role="presentation"
+          onClick={() => setPopup(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="register-result-title"
+            className="w-full max-w-lg rounded-2xl border border-line bg-white p-6 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-green">
+                  Completed
+                </p>
+                <h2 id="register-result-title" className="mt-1 font-display text-2xl text-ink">
+                  {popup.title}
+                </h2>
+              </div>
+              <button
+                type="button"
+                className="rounded-full p-1 text-2xl leading-none text-ink/40 transition hover:bg-ink/[0.05] hover:text-ink"
+                onClick={() => setPopup(null)}
+                aria-label="Close popup"
+                autoFocus
+              >
+                ×
+              </button>
+            </div>
+            <p className="mt-3 text-sm leading-relaxed text-ink/70">{popup.message}</p>
+            <button type="button" className="btn-dark mt-6 w-full" onClick={() => setPopup(null)}>
+              Done
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-4">
         <Stat label="Registered" value={data.stats.registered_voters} />
