@@ -1,12 +1,8 @@
 """FastAPI application entry point."""
 from __future__ import annotations
 
-import base64
-import io
 import os
-import tarfile
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +14,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .crypto import KeyMaterialError
 from .db import Base, SessionLocal, engine, get_db
+from .keyarchive import ensure_keys_materialized, materialize_on_import
 from .routers import (
     accreditation,
     accounts,
@@ -70,30 +67,18 @@ def _ensure_compatibility_columns() -> None:
                    "VARCHAR(20) NOT NULL DEFAULT 'otp'", "VARCHAR(20) NOT NULL DEFAULT 'otp'")
 
 
-def _materialize_keys() -> None:
-    """Restore encrypted key files on hosts with an ephemeral filesystem."""
-    archive = os.getenv("KEYS_ARCHIVE_B64", "").strip()
-    if not archive:
-        return
-    marker = settings.keys_dir / "credential_issuer_private.pem"
-    if marker.exists():
-        return
-    settings.keys_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        raw = base64.b64decode(archive, validate=True)
-        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as bundle:
-            for member in bundle.getmembers():
-                parts = Path(member.name).parts
-                if member.name.startswith(("/", "\\")) or ".." in parts:
-                    raise RuntimeError("Unsafe path in key archive")
-            bundle.extractall(settings.keys_dir)
-    except Exception as exc:  # pragma: no cover - deployment infrastructure
-        raise RuntimeError("Could not restore the election key archive") from exc
+# Serverless hosts may never send the ASGI startup event, so the archive is
+# restored while this module is imported and again at startup for long-running
+# servers, where an unusable archive must stop the process.
+materialize_on_import()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    _materialize_keys()
+    try:
+        ensure_keys_materialized()
+    except Exception as exc:  # pragma: no cover - deployment infrastructure
+        raise RuntimeError("Could not restore the election key archive") from exc
     issues = settings.production_issues
     if issues:
         raise RuntimeError(

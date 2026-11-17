@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .config import settings
+from .keyarchive import archive_error
 
 class KeyMaterialError(RuntimeError):
     """Election key material is missing or unreadable on this deployment.
@@ -150,8 +151,7 @@ def load_or_create_credential_key() -> rsa.RSAPrivateKey:
         # No key, nowhere durable to create one, and a fresh key would break
         # credentials issued minutes ago. Fail with something actionable.
         raise KeyMaterialError(
-            "Election keys are not provisioned on this deployment. Set KEYS_ARCHIVE_B64 "
-            "(an encrypted archive of the key directory) so the API can serve the ballot."
+            "Election keys are not provisioned on this deployment." + _provisioning_hint()
         )
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     priv_path.write_text(encrypt_secret(_private_pem(key)))
@@ -213,14 +213,24 @@ def election_key_dir(election_id: str) -> Path:
     return settings.keys_dir / "elections" / election_id
 
 
+def _provisioning_hint() -> str:
+    """Explain how to supply key material, naming a failed archive when there is one."""
+    detail = archive_error()
+    if detail:
+        return f" The configured KEYS_ARCHIVE_B64 could not be restored ({detail})."
+    return (
+        " Set KEYS_ARCHIVE_B64 (an encrypted archive of the key directory) "
+        "so the API can serve the ballot."
+    )
+
+
 def _required_key(path: Path, load: Callable[[bytes], object], label: str, encrypted: bool = False):
     """Read a key file, reporting absence as a provisioning problem."""
     try:
         return _cached_key_file(path, load, encrypted=encrypted)
     except FileNotFoundError as exc:
         raise KeyMaterialError(
-            f"{label} is not provisioned on this deployment. Set KEYS_ARCHIVE_B64 "
-            "(an encrypted archive of the key directory) so the API can serve the ballot."
+            f"{label} is not provisioned on this deployment." + _provisioning_hint()
         ) from exc
     except KeyMaterialError:
         raise
