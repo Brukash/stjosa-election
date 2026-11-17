@@ -256,11 +256,10 @@ def _provisioning_hint() -> str:
     """Explain how to supply key material, naming a failed archive when there is one."""
     detail = archive_error()
     if detail:
-        return f" Key material could not be restored: {detail}."
+        return f" The configured KEYS_ARCHIVE_B64 could not be restored ({detail})."
     return (
-        " Set KEYS_ARCHIVE_B64 (an encrypted archive of the key directory), or "
-        "publish one to the database with scripts/escrow_keys.py, so the API can "
-        "serve the ballot."
+        " Set KEYS_ARCHIVE_B64 (an encrypted archive of the key directory) "
+        "so the API can serve the ballot."
     )
 
 
