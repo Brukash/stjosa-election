@@ -104,7 +104,7 @@ def verify_receipt(reference: str, db: Session = Depends(get_db)):
                 proof = crypto.merkle_proof(commitments, index)
                 header = batch.signed_payload or {}
                 signature_valid = crypto.election_verify(
-                    election.id, canonical(header), batch.digital_signature
+                    election.signing_public_key, canonical(header), batch.digital_signature
                 )
             except ValueError:
                 proof, signature_valid = None, False
@@ -121,7 +121,7 @@ def verify_receipt(reference: str, db: Session = Depends(get_db)):
                 "digital_signature": batch.digital_signature,
                 "merkle_proof": proof,
                 "header": header,
-                "signing_public_key": crypto.signing_public_key_b64(election.id),
+                "signing_public_key": crypto.signing_public_b64_from_pem(election.signing_public_key),
                 "download_url": f"/api/commitments/{election.id}/batches/{batch.batch_reference}/download",
             }
 
@@ -181,7 +181,7 @@ def commitment_batches(election_id: str, db: Session = Depends(get_db)):
                 "published_at": b.published_at.isoformat() if b.published_at else None,
                 "header": b.signed_payload,
                 "signature_verified": crypto.election_verify(
-                    election.id, canonical(b.signed_payload or {}), b.digital_signature
+                    election.signing_public_key, canonical(b.signed_payload or {}), b.digital_signature
                 ),
                 "download_url": f"/api/commitments/{election.id}/batches/{b.batch_reference}/download",
             }

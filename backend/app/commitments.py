@@ -96,7 +96,7 @@ def batch_manifest(db: Session, election: Election, batch: PublishedCommitmentBa
         "header": header,
         "merkle_root": batch.merkle_root,
         "digital_signature": batch.digital_signature,
-        "signing_public_key": crypto.signing_public_key_b64(election.id),
+        "signing_public_key": crypto.signing_public_b64_from_pem(election.signing_public_key),
         "verification_instructions": (
             "Recompute the Merkle root from the commitments using SHA-256 with the "
             "'SJC-LEAF|' and 'SJC-NODE|' domain prefixes, then verify the Ed25519 signature "

@@ -110,7 +110,9 @@ def audit_report(db: Session, election: Election) -> dict:
                                 "election.status", "results."))
     ]
     signature_valid = bool(
-        declaration and crypto.election_verify(election.id, canonical(declaration.figures), declaration.signature)
+        declaration and crypto.election_verify(
+            election.signing_public_key, canonical(declaration.figures), declaration.signature
+        )
     )
     reconciles = bool(
         run and run.reconciliation

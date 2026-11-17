@@ -111,7 +111,7 @@ def prepare_ballot(payload: BallotPrepare, request: Request, db: Session = Depen
         raise HTTPException(status.HTTP_409_CONFLICT, "This voting credential has already been used")
 
     selections = _validate_selections(db, election, payload.selections)
-    encrypted = crypto.encrypt_ballot(election.id, election.reference, selections)
+    encrypted = crypto.encrypt_ballot(election.reference, selections, election.tally_public_key)
 
     prepared = PreparedBallot(
         election_id=election.id,

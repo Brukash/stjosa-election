@@ -153,7 +153,7 @@ def build_figures(db: Session, election: Election, run: TallyRun) -> dict:
 def declaration_dict(db: Session, declaration: ResultDeclaration, election: Election) -> dict:
     signer = db.get(Profile, declaration.declared_by)
     signature_valid = crypto.election_verify(
-        election.id, canonical(declaration.figures), declaration.signature
+        election.signing_public_key, canonical(declaration.figures), declaration.signature
     ) if declaration.signature else False
     return {
         "id": declaration.id,
@@ -166,7 +166,7 @@ def declaration_dict(db: Session, declaration: ResultDeclaration, election: Elec
         "correction_reason": declaration.correction_reason,
         "declared_at": declaration.declared_at.isoformat(),
         "declared_by": signer.full_name if signer else "Electoral Committee Chairman",
-        "signing_public_key": crypto.signing_public_key_b64(election.id),
+        "signing_public_key": crypto.signing_public_b64_from_pem(election.signing_public_key),
         "tally_run_id": declaration.tally_run_id,
     }
 

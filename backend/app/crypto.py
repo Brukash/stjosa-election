@@ -253,9 +253,25 @@ def create_election_keys(election_id: str) -> dict:
     }
 
 
-def tally_public_key(election_id: str) -> rsa.RSAPublicKey:
-    path = election_key_dir(election_id) / "tally_public.pem"
-    return _required_key(path, serialization.load_pem_public_key, "The election tally key")
+def tally_public_key_from_pem(pem: str | None) -> rsa.RSAPublicKey:
+    """Load the tally public key stored on the election row.
+
+    Public material is read from the database because a deployment can serve an
+    election without holding its key files at all. Only private operations need
+    the files.
+    """
+    if not pem:
+        raise KeyMaterialError(
+            "This election has no tally public key on record. Provision its keys "
+            "before ballots can be prepared."
+        )
+    try:
+        key = serialization.load_pem_public_key(pem.encode())
+    except Exception as exc:  # noqa: BLE001 - unreadable stored material is a setup error
+        raise KeyMaterialError("The stored election tally public key could not be read.") from exc
+    if not isinstance(key, rsa.RSAPublicKey):
+        raise KeyMaterialError("The stored election tally public key is not an RSA key.")
+    return key
 
 
 def tally_private_key(election_id: str) -> rsa.RSAPrivateKey:
@@ -278,14 +294,6 @@ def signing_private_key(election_id: str) -> ed25519.Ed25519PrivateKey:
     )
 
 
-def signing_public_key_b64(election_id: str) -> str:
-    path = election_key_dir(election_id) / "signing_public.pem"
-    return b64e(
-        _required_key(path, serialization.load_pem_public_key, "The election signing key")
-        .public_bytes_raw()
-    )
-
-
 def signing_public_b64_from_pem(pem: str | None) -> str | None:
     """Convert a stored public-key PEM to the base64 form the browser expects.
 
@@ -304,9 +312,13 @@ def election_sign(election_id: str, payload: bytes) -> str:
     return b64e(signing_private_key(election_id).sign(payload))
 
 
-def election_verify(election_id: str, payload: bytes, signature_b64: str) -> bool:
+def election_verify(signing_public_pem: str | None, payload: bytes,
+                    signature_b64: str) -> bool:
+    """Verify a record signature against the election's stored signing key."""
+    if not signing_public_pem:
+        return False
     try:
-        key = signing_private_key(election_id).public_key()
+        key = serialization.load_pem_public_key(signing_public_pem.encode())
         key.verify(b64d(signature_b64), payload)
         return True
     except Exception:
@@ -314,7 +326,8 @@ def election_verify(election_id: str, payload: bytes, signature_b64: str) -> boo
 
 
 # ── ballot encryption (hybrid RSA-OAEP + AES-256-GCM) ────────────────────────
-def encrypt_ballot(election_id: str, election_reference: str, selections: dict) -> dict:
+def encrypt_ballot(election_reference: str, selections: dict,
+                   tally_public_pem: str | None) -> dict:
     data_key = os.urandom(32)
     nonce = os.urandom(12)
     plaintext = json.dumps(
@@ -323,7 +336,7 @@ def encrypt_ballot(election_id: str, election_reference: str, selections: dict) 
         sort_keys=True,
     ).encode()
     ciphertext = AESGCM(data_key).encrypt(nonce, plaintext, election_reference.encode())
-    wrapped = tally_public_key(election_id).encrypt(
+    wrapped = tally_public_key_from_pem(tally_public_pem).encrypt(
         data_key,
         padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
     )
