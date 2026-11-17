@@ -220,6 +220,33 @@ def election_summary(db: Session, election: Election) -> dict:
     }
 
 
+def public_key_material(election: Election) -> dict:
+    """The public key material published for an election.
+
+    Read from the election row first. These values are exactly what the key
+    files produced, and a host without the files (a serverless deployment, where
+    the key directory is not shipped) could otherwise not render the public
+    page at all.
+    """
+    stored = (election.credential_public_key or "").strip()
+    credential = None
+    if stored.startswith("{"):
+        try:
+            credential = json.loads(stored)
+        except ValueError:
+            credential = None
+    if credential is None:
+        try:
+            credential = crypto.credential_public_numbers()
+        except crypto.KeyMaterialError:
+            credential = None
+    return {
+        "tally_public_key": election.tally_public_key,
+        "signing_public_key": crypto.signing_public_b64_from_pem(election.signing_public_key),
+        "credential_public_key": credential,
+    }
+
+
 def public_election_payload(db: Session, election: Election) -> dict:
     settings = get_settings_row(db, election.id)
     positions = db.execute(
@@ -265,12 +292,7 @@ def public_election_payload(db: Session, election: Election) -> dict:
             }
             for p in positions
         ],
-        "keys": {
-            "tally_public_key": election.tally_public_key,
-            "signing_public_key": crypto.signing_public_key_b64(election.id)
-            if election.signing_public_key else None,
-            "credential_public_key": crypto.credential_public_numbers(),
-        },
+        "keys": public_key_material(election),
     }
 
 

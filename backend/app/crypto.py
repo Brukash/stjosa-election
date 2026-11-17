@@ -286,6 +286,20 @@ def signing_public_key_b64(election_id: str) -> str:
     )
 
 
+def signing_public_b64_from_pem(pem: str | None) -> str | None:
+    """Convert a stored public-key PEM to the base64 form the browser expects.
+
+    The election row already carries its signing public key, so publishing it
+    does not need the key files to exist on the host.
+    """
+    if not pem:
+        return None
+    try:
+        return b64e(serialization.load_pem_public_key(pem.encode()).public_bytes_raw())
+    except Exception:  # noqa: BLE001 - unusable stored material is reported as absent
+        return None
+
+
 def election_sign(election_id: str, payload: bytes) -> str:
     return b64e(signing_private_key(election_id).sign(payload))
 

@@ -22,7 +22,7 @@ from ..models import (
     TallyProof,
     TallyRun,
 )
-from ..services import get_election, get_settings_row, resolve_public_election
+from ..services import get_election, get_settings_row, public_key_material, resolve_public_election
 
 router = APIRouter(tags=["verification"])
 
@@ -237,11 +237,12 @@ def publish_commitments(
 @router.get("/crypto/{election_id}")
 def public_keys(election_id: str, db: Session = Depends(get_db)):
     election = get_election(db, election_id)
+    keys = public_key_material(election)
     return {
         "election_reference": election.reference,
-        "credential": crypto.credential_public_numbers(),
-        "tally_public_key": election.tally_public_key,
-        "signing_public_key": crypto.signing_public_key_b64(election.id) if election.signing_public_key else None,
+        "credential": keys["credential_public_key"],
+        "tally_public_key": keys["tally_public_key"],
+        "signing_public_key": keys["signing_public_key"],
         "hash": "SHA-256",
         "commitment_scheme": "SHA-256 over election reference, nonce, wrapped key and ciphertext",
     }
