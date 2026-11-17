@@ -352,7 +352,7 @@ export default function ElectionSetupPage() {
             <SectionHeading eyebrow="Two-person approval" title="Configuration approvals" />
             <div className="space-y-2">
               {["chairman", "returning_officer"].map((role) => (
-                <div key={role} className="flex items-center justify-between rounded-lg border border-line px-3 py-2">
+                <div key={role} className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
                   <span className="text-sm capitalize text-ink/70">{role.replace("_", " ")}</span>
                   <span className={approvalRoles.has(role) ? "pill-green" : "pill-grey"}>
                     {approvalRoles.has(role) ? "Approved" : "Pending"}
@@ -422,7 +422,7 @@ export default function ElectionSetupPage() {
             <div
               key={key}
               className={`flex items-start gap-3 rounded-xl border p-4 ${
-                settings[key] ? "border-green/30 bg-green/[0.03]" : "border-line"
+                settings[key] ? "border-green/30 bg-green/[0.03]" : "border-rule"
               }`}
             >
               {canConfigure ? (
@@ -498,7 +498,7 @@ export default function ElectionSetupPage() {
           </form>
           <div className="mt-5 space-y-2">
             {(election.change_history ?? []).map((change: any) => (
-              <div key={change.id} className="rounded-xl border border-line p-3 text-xs">
+              <div key={change.id} className="rounded-xl border border-rule p-3 text-xs">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-semibold text-ink">{change.reason}</span>
                   <span className={change.status === "approved" ? "pill-green" : "pill-gold"}>

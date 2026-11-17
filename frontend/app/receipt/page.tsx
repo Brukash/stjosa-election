@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { PublicShell } from "@/components/PublicShell";
-import { Alert, Card, Loading } from "@/components/ui";
-import { API_BASE, api, formatDate } from "@/lib/api";
+import { Alert, Loading } from "@/components/ui";
+import { API_BASE, api, formatLongDate } from "@/lib/api";
 
 function ReceiptInner() {
   const params = useSearchParams();
@@ -22,17 +22,19 @@ function ReceiptInner() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-green">Voting receipt</p>
-      <h1 className="mt-2 text-3xl text-ink">Electronic ballot receipt</h1>
+      <p className="eyebrow">Voting receipt</p>
+      <h1 className="page-title mt-2">
+        Your ballot receipt
+      </h1>
 
       {!reference ? (
         <div className="mt-6">
           <Alert tone="info">
-            Enter your reference on the verification portal to open a receipt, or use the QR code on
-            your downloaded PDF receipt.
+            Open this page from the reference on your receipt, or from the QR code on your downloaded
+            PDF.
           </Alert>
-          <Link href="/verify" className="btn-primary mt-4">
-            Go to verification portal
+          <Link href="/verify" className="btn-primary mt-4 w-full sm:w-auto">
+            Check a ballot instead
           </Link>
         </div>
       ) : null}
@@ -41,55 +43,71 @@ function ReceiptInner() {
       {!receipt && !error && reference ? <Loading /> : null}
 
       {receipt ? (
-        <Card className="card-pad mt-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/45">
-                {receipt.election.title}
-              </p>
-              <h2 className="mt-1 font-display text-xl text-ink">{receipt.receipt_number}</h2>
+        <div className="mt-6 animate-rise">
+          <div className="rounded-[10px] border border-rule bg-surface shadow-ballot">
+            <div className="flex items-start justify-between gap-4 border-b border-rule px-5 py-5 sm:px-6">
+              <div className="min-w-0">
+                <p className="eyebrow">{receipt.election.title}</p>
+                <p className="mt-1.5 font-display text-[24px] leading-tight text-ink">
+                  {receipt.receipt_number}
+                </p>
+                <p className="mt-1 text-[12.5px] text-ink/55">
+                  Submitted {formatLongDate(receipt.issued_at)}
+                </p>
+              </div>
+              <span
+                aria-hidden="true"
+                className="hidden shrink-0 -rotate-6 rounded-[3px] border-2 border-forest/60 px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-[0.14em] text-forest sm:block"
+              >
+                Accepted
+              </span>
             </div>
-            <span className="pill-green">Ballot accepted</span>
+
+            <div className="px-5 py-5 sm:px-6">
+              <dl>
+                <div className="kv">
+                  <dt>Election</dt>
+                  <dd className="text-right text-[13px]">{receipt.election.reference}</dd>
+                </div>
+                <div className="kv">
+                  <dt>Reference for checking</dt>
+                  <dd className="tabular break-all text-right text-[13px]">
+                    {receipt.receipt_reference}
+                  </dd>
+                </div>
+                <div className="kv">
+                  <dt>Ballot fingerprint</dt>
+                  <dd className="code max-w-[62%] text-right">{receipt.ballot_commitment}</dd>
+                </div>
+              </dl>
+
+              <div className="mt-4">
+                <Alert tone="info">{receipt.note}</Alert>
+              </div>
+
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+                <a
+                  className="btn-primary w-full sm:w-auto"
+                  href={`${API_BASE}/api/receipts/${encodeURIComponent(receipt.receipt_reference)}/pdf`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Download PDF
+                </a>
+                <Link
+                  className="btn-outline w-full sm:w-auto"
+                  href={`/verify?ref=${encodeURIComponent(receipt.receipt_reference)}`}
+                >
+                  Check this ballot
+                </Link>
+              </div>
+            </div>
           </div>
 
-          <dl className="mt-5 space-y-1">
-            <div className="kv">
-              <dt>Election reference</dt>
-              <dd className="font-mono text-xs">{receipt.election.reference}</dd>
-            </div>
-            <div className="kv">
-              <dt>Verification reference</dt>
-              <dd className="font-mono text-sm font-bold">{receipt.receipt_reference}</dd>
-            </div>
-            <div className="kv">
-              <dt>Submitted</dt>
-              <dd>{formatDate(receipt.issued_at)}</dd>
-            </div>
-            <div className="kv">
-              <dt>Ballot commitment</dt>
-              <dd className="code max-w-[70%] text-right">{receipt.ballot_commitment}</dd>
-            </div>
-          </dl>
-
-          <Alert tone="info">{receipt.note}</Alert>
-
-          <div className="mt-5 flex flex-wrap gap-2">
-            <a
-              className="btn-primary"
-              href={`${API_BASE}/api/receipts/${encodeURIComponent(receipt.receipt_reference)}/pdf`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Download PDF
-            </a>
-            <Link
-              className="btn-outline"
-              href={`/verify?ref=${encodeURIComponent(receipt.receipt_reference)}`}
-            >
-              Verify inclusion
-            </Link>
-          </div>
-        </Card>
+          <p className="mt-4 text-[12px] leading-relaxed text-ink/50">
+            Keep this receipt. It proves your ballot was accepted without revealing your choices.
+          </p>
+        </div>
       ) : null}
     </div>
   );

@@ -5,11 +5,13 @@ import { useEffect, useState } from "react";
 import { ElectionChooser } from "@/components/ElectionChooser";
 import { PublicShell } from "@/components/PublicShell";
 import { Alert, Card, Loading, StatusPill } from "@/components/ui";
-import { api, formatDate } from "@/lib/api";
+import { api, formatLongDate } from "@/lib/api";
 import { issueCredential, storeCredential } from "@/lib/credential";
 import { usePublicElectionChoice } from "@/lib/publicElections";
 
 type Step = "identify" | "credential" | "ready";
+
+const STEP_LABELS = ["Voter ID", "Credential", "Ballot"];
 
 export default function AccreditPage() {
   const { options, selectedId, election, choose, loading, error: choiceError } = usePublicElectionChoice();
@@ -79,65 +81,75 @@ export default function AccreditPage() {
     setError("");
   }
 
+  const stepIndex = ["identify", "credential", "ready"].indexOf(step);
+
   return (
     <PublicShell>
-      <div className="mx-auto max-w-3xl">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-green">Voter accreditation</p>
-        <h1 className="mt-2 text-3xl text-ink">Verify your Voter ID, then vote anonymously</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink/60">
-          Accreditation confirms you are on the approved alumni register. Enter your Voter ID once; if it
-          matches the register, you can create a single anonymous voting credential. The system cannot tell
-          which ballot that credential later submits.
+      <div className="mx-auto max-w-2xl">
+        <p className="eyebrow">Accreditation</p>
+        <h1 className="page-title mt-2">
+          Enter your Voter ID
+        </h1>
+        <p className="measure mt-3 text-[14.5px] leading-relaxed text-ink/70">
+          Your Voter ID is in the email the Electoral Committee sent when your registration was
+          approved. It looks like <span className="tabular">SJC/AL/2004/001</span>. You do not need a
+          password or a one-time code.
         </p>
 
         {choiceError ? <div className="mt-6"><Alert tone="error">{choiceError}</Alert></div> : null}
-        {loading ? <Loading label="Loading active elections…" /> : null}
+        {loading ? <Loading label="Checking which election is open…" /> : null}
+
         {!loading && options?.length === 0 ? (
           <div className="mt-6">
-            <Alert tone="info">No election is currently open for accreditation or voting.</Alert>
+            <Alert tone="info">
+              No election is open for accreditation right now. When the committee opens the ballot,
+              it will appear here.
+            </Alert>
           </div>
         ) : null}
+
         {options && options.length > 1 ? (
           <ElectionChooser elections={options} selectedId={selectedId} onSelect={choose} />
         ) : null}
+
         {!loading && options && options.length > 0 && !selectedId ? (
           <div className="mt-5">
             <Alert tone="info">Choose an election above to continue.</Alert>
           </div>
         ) : null}
+
         {selectedId && !election && !choiceError ? <Loading label="Loading election…" /> : null}
 
         {election ? (
           <>
-            <Card className="card-pad mt-6">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/45">
-                    {election.title}
-                  </p>
-                  <p className="mt-1 text-xs text-ink/50">
-                    Closes {formatDate(election.closes_at)} · Reference {election.reference}
-                  </p>
-                </div>
+            <div className="mt-7 border-y border-rule py-3">
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                <p className="min-w-0 text-[13.5px] leading-snug text-ink">
+                  {election.title}
+                  <span className="mt-0.5 block text-[12px] text-ink/55">
+                    Closes {formatLongDate(election.closes_at)}
+                  </span>
+                </p>
                 <StatusPill status={election.status} label={election.status_label} />
               </div>
-              <ol className="mt-5 grid grid-cols-3 gap-2 text-center text-[10px] font-semibold uppercase tracking-wide sm:text-[11px]">
-                {["Voter ID", "Credential", "Ballot"].map((label, index) => {
-                  const order = ["identify", "credential", "ready"];
-                  const active = order.indexOf(step) >= index;
+
+              <ol className="mt-3 flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em]">
+                {STEP_LABELS.map((label, index) => {
+                  const active = stepIndex >= index;
                   return (
                     <li
                       key={label}
-                      className={`rounded-lg border px-1 py-2 ${
-                        active ? "border-green/30 bg-green/[0.06] text-green" : "border-line text-ink/35"
+                      className={`flex flex-1 items-center gap-1.5 border-t-2 pt-2 ${
+                        active ? "border-ochre text-ink" : "border-rule text-ink/40"
                       }`}
                     >
-                      {index + 1}. {label}
+                      <span className="tabular">{index + 1}</span>
+                      <span className="truncate">{label}</span>
                     </li>
                   );
                 })}
               </ol>
-            </Card>
+            </div>
 
             {!accreditationOpen ? (
               <div className="mt-5">
@@ -159,54 +171,58 @@ export default function AccreditPage() {
                     </label>
                     <input
                       id="voter-id"
-                      className="input"
-                      placeholder="e.g. SJC/AL/2004/001"
+                      className="input tabular"
+                      placeholder="SJC/AL/2004/001"
                       value={voterId}
                       onChange={(event) => setVoterId(event.target.value)}
                       autoComplete="off"
+                      autoCapitalize="characters"
+                      spellCheck={false}
                       required
                       disabled={!accreditationOpen}
                     />
-                    <p className="mt-2 text-xs leading-relaxed text-ink/45">
-                      Enter the Voter ID from the approved Electoral Committee register. Your Voter ID is
-                      included in the registration email sent when your entry was approved.
-                    </p>
-                    <p className="mt-2 text-xs leading-relaxed text-ink/45">
-                      If the Voter ID matches the register, you can proceed directly. No OTP is required.
-                      Contact details cannot be entered or changed here.
+                    <p className="mt-2 text-[12.5px] leading-relaxed text-ink/55">
+                      Type it exactly as it appears in your email. If it matches the approved register,
+                      you continue straight to your ballot.
                     </p>
                   </div>
                   <button className="btn-primary w-full sm:w-auto" disabled={busy || !accreditationOpen}>
-                    {busy ? "Checking Voter ID…" : "Verify my Voter ID"}
+                    {busy ? "Checking…" : "Continue"}
                   </button>
                 </form>
               ) : null}
 
               {step === "credential" && session ? (
                 <div className="space-y-5">
-                  <Alert tone="success">
-                    Voter ID matched the approved register. Welcome, {session.voter?.full_name}. You are
-                    accredited for {session.election_reference}.
-                  </Alert>
-                  {session.already_issued ? (
-                    <Alert tone="warn">
-                      A credential has already been issued to this Voter ID. If you lost it, contact the
-                      Accreditation Officer for a controlled exception.
-                    </Alert>
-                  ) : null}
-                  <div className="rounded-xl border border-line bg-cream/60 p-4 text-sm text-ink/70">
-                    <p className="font-semibold text-ink">How your anonymity is protected</p>
-                    <p className="mt-1.5 leading-relaxed">
-                      Your browser generates a random secret, blinds it, and asks the accreditation service
-                      to sign it. The service never sees the secret, so the signed credential cannot be
-                      linked back to your Voter ID or to your ballot.
+                  <div>
+                    <p className="eyebrow">Voter ID confirmed</p>
+                    <p className="mt-1.5 font-display text-[20px] leading-snug text-ink">
+                      Welcome, {session.voter?.full_name}.
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-3">
-                    <button className="btn-primary" onClick={createCredential} disabled={busy || session.already_issued}>
-                      {busy ? "Creating credential…" : "Create my anonymous voting credential"}
+
+                  {session.already_issued ? (
+                    <Alert tone="warn">
+                      A voting credential has already been issued to this Voter ID. If you lost it,
+                      contact the Accreditation Officer for help.
+                    </Alert>
+                  ) : null}
+
+                  <p className="text-[13.5px] leading-relaxed text-ink/70">
+                    Next, this browser creates a private code that the committee signs without seeing.
+                    Your ballot is submitted with that code, not with your name, so no one can trace the
+                    ballot back to you.
+                  </p>
+
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                    <button
+                      className="btn-primary w-full sm:w-auto"
+                      onClick={createCredential}
+                      disabled={busy || session.already_issued}
+                    >
+                      {busy ? "Preparing…" : "Get my ballot"}
                     </button>
-                    <button type="button" className="btn-ghost" onClick={startOver}>
+                    <button type="button" className="btn-ghost w-full sm:w-auto" onClick={startOver}>
                       Use a different Voter ID
                     </button>
                   </div>
@@ -215,37 +231,47 @@ export default function AccreditPage() {
 
               {step === "ready" && credential ? (
                 <div className="space-y-5">
-                  <Alert tone="success">
-                    Your anonymous voting credential is ready and verified in this browser. It is held
-                    only in this tab and will be spent when you cast your ballot.
-                  </Alert>
-                  <dl className="space-y-1">
+                  <div>
+                    <p className="eyebrow">Ready to vote</p>
+                    <p className="mt-1.5 font-display text-[20px] leading-snug text-ink">
+                      Your ballot is unlocked in this browser.
+                    </p>
+                  </div>
+                  <dl className="space-y-0">
                     <div className="kv">
-                      <dt>Credential fingerprint</dt>
-                      <dd className="font-mono text-xs">
-                        {credential.signature.slice(0, 20)}…{credential.signature.slice(-8)}
-                      </dd>
+                      <dt>Positions on the ballot</dt>
+                      <dd className="tabular">{election.positions?.length ?? 0}</dd>
                     </div>
                     <div className="kv">
-                      <dt>Ballot</dt>
-                      <dd>{election.positions?.length ?? 0} positions</dd>
+                      <dt>Held in</dt>
+                      <dd>This tab only</dd>
                     </div>
                   </dl>
-                  <div className="flex flex-wrap gap-3">
-                    <Link href={`/vote?election=${encodeURIComponent(election.id)}`} className="btn-primary">
+                  <p className="text-[12.5px] leading-relaxed text-ink/55">
+                    Keep this tab open until you have submitted. If you close it, come back and enter
+                    your Voter ID again.
+                  </p>
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <Link
+                      href={`/vote?election=${encodeURIComponent(election.id)}`}
+                      className="btn-primary w-full sm:w-auto"
+                    >
                       Open my ballot
                     </Link>
-                    <Link href="/verify" className="btn-outline">
-                      Verification portal
+                    <Link href="/verify" className="btn-outline w-full sm:w-auto">
+                      How verification works
                     </Link>
                   </div>
                 </div>
               ) : null}
             </Card>
 
-            <p className="mt-5 text-center text-xs text-ink/40">
+            <p className="mt-6 text-center text-[12px] leading-relaxed text-ink/50">
               Having trouble? Contact the Accreditation Officer at{" "}
-              <span className="font-mono">accreditation@sjcjos-alumni.org</span>.
+              <a className="font-medium text-forest underline decoration-rule underline-offset-2" href="mailto:accreditation@sjcjos-alumni.org">
+                accreditation@sjcjos-alumni.org
+              </a>
+              .
             </p>
           </>
         ) : null}

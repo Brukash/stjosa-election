@@ -75,9 +75,9 @@ export default function AdminDashboardPage() {
               : ""}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <select
-            className="input !w-auto !py-2 text-sm"
+            className="input !py-2 w-full text-sm sm:!w-auto"
             value={selected}
             onChange={(event) => setSelected(event.target.value)}
             aria-label="Select election"
@@ -267,7 +267,7 @@ export default function AdminDashboardPage() {
                 ) : (
                   <ul className="space-y-2">
                     {overview.live.security_alerts.map((alert: any, index: number) => (
-                      <li key={index} className="rounded-lg border border-line px-3 py-2 text-xs">
+                      <li key={index} className="rounded-lg border border-rule px-3 py-2 text-xs">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold text-ink">{alert.action}</span>
                           <span className="text-ink/40">{formatDate(alert.at)}</span>

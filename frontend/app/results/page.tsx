@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { PublicShell } from "@/components/PublicShell";
 import { Alert, Card, Loading, Stat } from "@/components/ui";
-import { API_BASE, api, formatDate, shortHash } from "@/lib/api";
+import { API_BASE, api, formatLongDate } from "@/lib/api";
 
 export default function ResultsPage() {
   const [data, setData] = useState<any | null>(null);
@@ -21,13 +21,14 @@ export default function ResultsPage() {
 
   return (
     <PublicShell>
-      <div className="mx-auto max-w-4xl">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-green">Official results</p>
-        <h1 className="mt-2 text-3xl text-ink">{data?.election?.title ?? "Election results"}</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-ink/60">
-          Declared results are digitally signed and published together with the counting evidence.
-          Anyone can check the signature and the anonymous commitment list without relying on the
-          administrator.
+      <div className="mx-auto max-w-3xl">
+        <p className="eyebrow">Official results</p>
+        <h1 className="page-title mt-2">
+          {data?.election?.title ?? "Election results"}
+        </h1>
+        <p className="mt-2 max-w-xl text-[13.5px] leading-relaxed text-ink/65">
+          Results are declared by the Electoral Committee and published with the record they were
+          counted from, so the figures can be checked without asking anyone.
         </p>
 
         {error ? <div className="mt-6"><Alert tone="error">{error}</Alert></div> : null}
@@ -37,9 +38,9 @@ export default function ResultsPage() {
           <div className="mt-6 space-y-4">
             <Alert tone="info">{data.message}</Alert>
             {data.turnout ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <Stat label="Eligible voters" value={data.turnout.eligible_voters} />
-                <Stat label="Accredited voters" value={data.turnout.accredited_voters} />
+              <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
+                <Stat label="Eligible" value={data.turnout.eligible_voters} />
+                <Stat label="Accredited" value={data.turnout.accredited_voters} />
                 <Stat label="Ballots cast" value={data.turnout.votes_cast} />
               </div>
             ) : null}
@@ -48,119 +49,143 @@ export default function ResultsPage() {
 
         {data?.published && figures ? (
           <div className="mt-6 space-y-5">
-            <Card className="card-pad">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="rounded-[10px] border border-rule bg-surface shadow-ballot">
+              <div className="flex items-start justify-between gap-4 border-b border-rule px-5 py-5 sm:px-6">
                 <div>
-                  <h2 className="font-display text-xl text-ink">Declaration</h2>
-                  <p className="mt-1 text-xs text-ink/50">
-                    Version {data.version} · {formatDate(data.declared_at)} · {data.declared_by}
+                  <p className="eyebrow">Declaration</p>
+                  <p className="mt-1.5 text-[12.5px] text-ink/60">
+                    {formatLongDate(data.declared_at)} · {data.declared_by}
                   </p>
                 </div>
-                <span className={data.signature_valid ? "pill-green" : "pill-red"}>
-                  {data.signature_valid ? "Signature valid" : "Signature invalid"}
+                <span
+                  aria-hidden="true"
+                  className={`hidden shrink-0 -rotate-6 rounded-[3px] border-2 px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-[0.14em] sm:block ${
+                    data.signature_valid ? "border-forest/60 text-forest" : "border-clay/60 text-clay"
+                  }`}
+                >
+                  {data.signature_valid ? "Signed" : "Unverified"}
                 </span>
               </div>
-              {data.correction_reason ? (
-                <div className="mt-3">
-                  <Alert tone="warn">Corrected declaration: {data.correction_reason}</Alert>
+
+              <div className="px-5 py-5 sm:px-6">
+                {data.correction_reason ? (
+                  <div className="mb-4">
+                    <Alert tone="warn">Corrected declaration: {data.correction_reason}</Alert>
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3">
+                  <Stat label="Eligible voters" value={totals.eligible_voters} />
+                  <Stat label="Accredited voters" value={totals.accredited_voters} />
+                  <Stat label="Turnout" value={`${totals.turnout_percentage}%`} />
+                  <Stat label="Votes cast" value={totals.votes_cast} />
+                  <Stat label="Valid ballots" value={totals.valid_ballots} />
+                  <Stat label="Invalid ballots" value={totals.invalid_ballots} />
                 </div>
-              ) : null}
-              <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                <Stat label="Eligible voters" value={totals.eligible_voters} />
-                <Stat label="Accredited voters" value={totals.accredited_voters} />
-                <Stat label="Turnout" value={`${totals.turnout_percentage}%`} />
-                <Stat label="Votes cast" value={totals.votes_cast} />
-                <Stat label="Valid ballots" value={totals.valid_ballots} />
-                <Stat label="Invalid ballots" value={totals.invalid_ballots} />
+
+                <p className="mt-4 text-[12px] leading-relaxed text-ink/50">
+                  {totals.challenged_ballots} checked-and-spoiled ballot(s) were excluded from the
+                  count. Those were ballots voters deliberately spoiled to test the process.
+                </p>
               </div>
-              <p className="mt-3 text-xs text-ink/45">
-                {totals.challenged_ballots} challenged verification ballot(s) were excluded from the count.
-              </p>
-            </Card>
+            </div>
 
             {figures.positions.map((position: any) => (
               <Card key={position.id} className="card-pad">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <h3 className="font-display text-lg text-ink">{position.title}</h3>
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink/40">
+                <div className="flex flex-wrap items-baseline justify-between gap-2 border-b-2 border-ink/80 pb-2">
+                  <h2 className="font-display text-[19px] leading-tight text-ink">{position.title}</h2>
+                  <span className="shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-ink/45">
                     {position.seats} seat{position.seats === 1 ? "" : "s"}
                   </span>
                 </div>
-                <div className="table-wrap mt-3">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Candidate</th>
-                        <th className="text-right">Votes</th>
-                        <th className="text-right">Share</th>
-                        <th>Result</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {position.candidates.map((candidate: any) => (
-                        <tr key={candidate.id}>
-                          <td className="font-medium text-ink">{candidate.full_name}</td>
-                          <td className="text-right font-mono">{candidate.votes}</td>
-                          <td className="text-right">{candidate.percentage}%</td>
-                          <td>
-                            {candidate.is_winner ? (
-                              <span className="pill-green">Elected{candidate.tie ? " · tie" : ""}</span>
-                            ) : (
-                              <span className="text-xs text-ink/40">Not elected</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+
+                <div className="mt-1">
+                  {position.candidates.map((candidate: any) => (
+                    <div
+                      key={candidate.id}
+                      className={`flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-rule/70 py-3 ${
+                        candidate.is_winner ? "bg-forest/[0.04]" : ""
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className={`text-[14.5px] leading-snug ${
+                            candidate.is_winner ? "font-semibold text-forest" : "text-ink"
+                          }`}
+                        >
+                          {candidate.full_name}
+                        </p>
+                        {candidate.is_winner ? (
+                          <p className="mt-0.5 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-ochre">
+                            Elected{candidate.tie ? " · tied" : ""}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="flex items-baseline gap-4 tabular">
+                        <span className="text-[12px] text-ink/50">{candidate.percentage}%</span>
+                        <span className="min-w-[3ch] text-right text-[14px] font-semibold text-ink">
+                          {candidate.votes}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </Card>
             ))}
 
             <Card className="card-pad">
-              <h3 className="font-display text-lg text-ink">Verification evidence</h3>
-              <dl className="mt-3 space-y-1">
-                <div className="kv">
-                  <dt>Signed payload hash</dt>
-                  <dd className="code max-w-[72%] text-right">{data.signed_payload_hash}</dd>
-                </div>
-                <div className="kv">
-                  <dt>Tally evidence hash</dt>
-                  <dd className="code max-w-[72%] text-right">
-                    {figures.verification?.tally_evidence_hash}
-                  </dd>
-                </div>
+              <h2 className="font-display text-[18px] text-ink">The record</h2>
+              <dl className="mt-3">
                 <div className="kv">
                   <dt>Receipts issued</dt>
-                  <dd>{figures.verification?.receipts_issued}</dd>
+                  <dd className="text-right tabular">{figures.verification?.receipts_issued}</dd>
                 </div>
                 <div className="kv">
-                  <dt>Published commitments</dt>
-                  <dd>{figures.verification?.published_commitments}</dd>
+                  <dt>Published ballot fingerprints</dt>
+                  <dd className="text-right tabular">{figures.verification?.published_commitments}</dd>
                 </div>
                 <div className="kv">
-                  <dt>Counted ballot proofs</dt>
-                  <dd>{figures.verification?.counted_ballot_proofs}</dd>
-                </div>
-                <div className="kv">
-                  <dt>Signing public key (Ed25519)</dt>
-                  <dd className="font-mono text-[11px]">{shortHash(data.signing_public_key, 16)}</dd>
+                  <dt>Ballots proven at counting</dt>
+                  <dd className="text-right tabular">{figures.verification?.counted_ballot_proofs}</dd>
                 </div>
               </dl>
-              <div className="mt-5 flex flex-wrap gap-2">
+
+              <details className="mt-4 border-t border-rule pt-3">
+                <summary className="cursor-pointer text-[12px] font-medium text-ink/55">
+                  Material for an independent check
+                </summary>
+                <dl className="mt-3">
+                  <div className="kv">
+                    <dt>Signed results hash</dt>
+                    <dd className="code max-w-[62%] text-right">{data.signed_payload_hash}</dd>
+                  </div>
+                  <div className="kv">
+                    <dt>Counting evidence hash</dt>
+                    <dd className="code max-w-[62%] text-right">
+                      {figures.verification?.tally_evidence_hash}
+                    </dd>
+                  </div>
+                  <div className="kv">
+                    <dt>Signing key</dt>
+                    <dd className="code max-w-[62%] text-right">{data.signing_public_key}</dd>
+                  </div>
+                </dl>
+              </details>
+
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row">
                 <a
-                  className="btn-primary"
+                  className="btn-primary w-full sm:w-auto"
                   href={`${API_BASE}/api/monitoring/${data.election.id}/result-certificate.pdf`}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Download result certificate (PDF)
+                  Download result certificate
                 </a>
-                <Link href="/commitments" className="btn-outline">
-                  Published commitments
+                <Link href="/verify" className="btn-outline w-full sm:w-auto">
+                  Check my ballot
                 </Link>
-                <Link href="/verify" className="btn-outline">
-                  Verify my ballot
+                <Link href="/commitments" className="btn-ghost w-full sm:w-auto">
+                  Published record
                 </Link>
               </div>
             </Card>

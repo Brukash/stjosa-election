@@ -54,7 +54,7 @@ export default function ElectionWorkspaceLayout({ children }: { children: React.
         </div>
       </div>
 
-      <nav className="flex gap-1 overflow-x-auto border-b border-line pb-1">
+      <nav className="flex gap-1 overflow-x-auto border-b border-rule pb-1">
         {TABS.filter((tab) => tab.permissions.some((permission) => can(profile, permission))).map((tab) => {
           const href = `${base}${tab.segment}`;
           const active = tab.segment === "" ? pathname === base : pathname === href;

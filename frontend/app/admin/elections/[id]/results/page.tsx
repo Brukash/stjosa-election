@@ -106,7 +106,7 @@ export default function ResultsAdminPage() {
             ["Submitted for review", ["under_review", "declared"].includes(status)],
             ["Declared", declarations.length > 0],
           ].map(([label, done]) => (
-            <div key={String(label)} className="flex items-center justify-between rounded-lg border border-line px-3 py-2">
+            <div key={String(label)} className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
               <span className="text-sm text-ink/70">{label}</span>
               <span className={done ? "pill-green" : "pill-grey"}>{done ? "Done" : "Pending"}</span>
             </div>
@@ -200,7 +200,7 @@ export default function ResultsAdminPage() {
         ) : (
           <div className="space-y-3">
             {declarations.map((declaration: any) => (
-              <div key={declaration.id} className="rounded-xl border border-line p-4">
+              <div key={declaration.id} className="rounded-xl border border-rule p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="font-semibold text-ink">Version {declaration.version}</p>
@@ -224,7 +224,7 @@ export default function ResultsAdminPage() {
         )}
 
         {status === "declared" && can(profile, "results.approve") ? (
-          <form onSubmit={correct} className="mt-5 space-y-3 rounded-xl border border-dashed border-line p-4">
+          <form onSubmit={correct} className="mt-5 space-y-3 rounded-xl border border-dashed border-rule p-4">
             <label className="label">Authorised correction (creates a new version)</label>
             <textarea
               className="input min-h-[70px]"

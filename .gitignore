@@ -25,3 +25,9 @@ frontend/next-env.d.ts
 
 # TypeScript build metadata
 *.tsbuildinfo
+
+.vercel
+.env*
+
+# Local design review screenshots (large, regenerated per review)
+design/audit/

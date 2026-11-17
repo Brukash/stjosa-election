@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Crest } from "@/components/PublicShell";
 import { NotAuthorized } from "@/components/ui";
-import { api, clearSession, getProfile, getToken, saveSession } from "@/lib/api";
+import { api, clearSession, getToken, saveSession } from "@/lib/api";
 
 const NAV = [
   { href: "/admin", label: "Monitoring", permission: "monitor.view" },
@@ -66,7 +66,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   if (!checked || !profile) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-cream text-sm text-ink/50">
+      <div className="flex min-h-screen items-center justify-center bg-paper text-sm text-ink/50">
         Checking your session…
       </div>
     );
@@ -80,8 +80,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     : profile.roles ?? [];
 
   return (
-    <div className="min-h-screen bg-cream">
-      <header className="sticky top-0 z-30 border-b border-line bg-white/95 shadow-sm backdrop-blur">
+    <div className="min-h-screen bg-paper">
+      <header className="sticky top-0 z-30 border-b border-rule bg-white/95 shadow-sm backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <Crest size={34} />

@@ -80,15 +80,15 @@ export default function ElectionsAdminPage() {
               <StatusPill status={election.status} label={election.status_label} />
             </div>
             <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-lg bg-cream px-2 py-2">
+              <div className="rounded-lg bg-paper px-2 py-2">
                 <p className="font-display text-lg text-ink">{election.totals.eligible_voters}</p>
                 <p className="text-[10px] uppercase tracking-wide text-ink/40">Eligible</p>
               </div>
-              <div className="rounded-lg bg-cream px-2 py-2">
+              <div className="rounded-lg bg-paper px-2 py-2">
                 <p className="font-display text-lg text-ink">{election.totals.votes_cast}</p>
                 <p className="text-[10px] uppercase tracking-wide text-ink/40">Votes</p>
               </div>
-              <div className="rounded-lg bg-cream px-2 py-2">
+              <div className="rounded-lg bg-paper px-2 py-2">
                 <p className="font-display text-lg text-ink">{election.totals.turnout_percentage}%</p>
                 <p className="text-[10px] uppercase tracking-wide text-ink/40">Turnout</p>
               </div>

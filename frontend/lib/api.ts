@@ -106,6 +106,27 @@ export function formatDate(value?: string | null, withTime = true): string {
   });
 }
 
+// Voter-facing dates are shown in the election's own time zone with a plain
+// 12-hour clock, so "closes" reads the same in Lagos and abroad.
+export function formatLongDate(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const day = date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Africa/Lagos",
+  });
+  const time = date.toLocaleTimeString("en-GB", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Africa/Lagos",
+  });
+  return `${day}, ${time} WAT`;
+}
+
 export function toDateTimeInput(value?: string | null): string {
   if (!value) return "";
   const date = new Date(value);

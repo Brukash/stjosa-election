@@ -61,7 +61,7 @@ export default function DeliverySettingsPage() {
                   ))}
                 </ul>
                 {provider.channel === "whatsapp" ? (
-                  <div className="mt-4 space-y-1 border-t border-line pt-3 text-[11px] text-ink/55">
+                  <div className="mt-4 space-y-1 border-t border-rule pt-3 text-[11px] text-ink/55">
                     <p>Template: <span className="font-mono">{provider.template}</span></p>
                     <p>Language: <span className="font-mono">{provider.template_language}</span></p>
                     <p>Consent is required for every voter before WhatsApp is offered.</p>

@@ -270,7 +270,7 @@ export default function RegisterPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="register-result-title"
-            className="w-full max-w-lg rounded-2xl border border-line bg-white p-6 shadow-2xl"
+            className="w-full max-w-lg rounded-2xl border border-rule bg-white p-6 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4">

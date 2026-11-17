@@ -5,22 +5,34 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#0B3D24",
-        inklight: "#155233",
-        green: "#12703C",
-        greenlight: "#0E5C31",
-        leaf: "#1B8A4B",
-        cream: "#FAF8EC",
-        gold: "#E7D21C",
-        line: "#DCE5D8",
+        // One ramp for the whole app: the public surface reads the role names
+        // (paper/surface/forest/ochre/rule/clay), admin screens still use the
+        // older names (ink, green, greenlight) mapped to the same values.
+        ink: "#16241C",
+        inklight: "#24382B",
+        green: "#0E3B2A",
+        greenlight: "#184C36",
+        paper: "#F4EFE3",
+        surface: "#FFFCF5",
+        forest: "#0E3B2A",
+        ochre: "#B0731F",
+        rule: "#DAD2C0",
+        clay: "#8C3B2E",
       },
       fontFamily: {
-        display: ["Georgia", "Cambria", "serif"],
-        body: ["'Segoe UI'", "system-ui", "sans-serif"],
-        mono: ["'Cascadia Mono'", "Consolas", "monospace"],
+        display: ["var(--font-display)", "Georgia", "serif"],
+        body: ["var(--font-body)", "'Segoe UI'", "system-ui", "sans-serif"],
+        mono: ["'Cascadia Mono'", "Consolas", "ui-monospace", "monospace"],
+      },
+      maxWidth: {
+        measure: "62ch",
       },
       boxShadow: {
-        card: "0 1px 2px rgba(14,33,64,0.06), 0 8px 24px rgba(14,33,64,0.05)",
+        card: "0 1px 0 rgba(22,36,28,0.04), 0 12px 28px -18px rgba(22,36,28,0.35)",
+        ballot: "0 1px 0 rgba(22,36,28,0.05), 0 24px 48px -32px rgba(22,36,28,0.55)",
+      },
+      letterSpacing: {
+        eyebrow: "0.18em",
       },
       opacity: {
         8: "0.08",

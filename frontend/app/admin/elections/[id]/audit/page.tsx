@@ -59,11 +59,11 @@ export default function AuditPage() {
           </div>
         </div>
 
-        <div className="rounded-xl border border-line">
+        <div className="rounded-xl border border-rule">
           {report.checks.map((check: any) => (
             <div
               key={check.check}
-              className="flex flex-col gap-1 border-b border-line/70 px-4 py-3 last:border-0 sm:flex-row sm:items-start sm:justify-between"
+              className="flex flex-col gap-1 border-b border-rule/70 px-4 py-3 last:border-0 sm:flex-row sm:items-start sm:justify-between"
             >
               <div className="flex items-start gap-3">
                 <span
@@ -123,7 +123,7 @@ export default function AuditPage() {
           ) : (
             <ul className="space-y-2">
               {report.failed_attempts.slice(0, 12).map((attempt: any, index: number) => (
-                <li key={index} className="rounded-lg border border-line px-3 py-2 text-xs">
+                <li key={index} className="rounded-lg border border-rule px-3 py-2 text-xs">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold text-ink">{attempt.action}</span>
                     <span className="text-ink/40">{formatDate(attempt.at)}</span>

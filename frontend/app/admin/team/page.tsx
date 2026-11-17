@@ -139,7 +139,7 @@ export default function TeamPage() {
             <SectionHeading eyebrow="Staff accounts" title="Officials with access" />
             <div className="space-y-4">
               {accounts.map((account) => (
-                <div key={account.id} className="rounded-xl border border-line p-4">
+                <div key={account.id} className="rounded-xl border border-rule p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-ink">

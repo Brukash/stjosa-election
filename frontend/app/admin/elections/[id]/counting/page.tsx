@@ -75,7 +75,7 @@ export default function CountingPage() {
         </SectionHeading>
         <div className="grid gap-2 sm:grid-cols-2">
           {["chairman", "returning_officer"].map((role) => (
-            <div key={role} className="flex items-center justify-between rounded-lg border border-line px-3 py-2">
+            <div key={role} className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
               <span className="text-sm capitalize text-ink/70">{role.replace(/_/g, " ")}</span>
               <span className={roles.has(role) ? "pill-green" : "pill-grey"}>
                 {roles.has(role) ? "Authorised" : "Pending"}
