@@ -111,6 +111,13 @@ No gradients, no glass, no purple, no glow.
 - 2026-11-17 — Pass 2 complete: ballot marking, review, sealed, challenge and cast screens; verify,
   results, commitments, receipt and the election chooser rebuilt. Ballot action bar is `fixed` on
   mobile (sticky was clipped by an ancestor) with a 96px spacer.
+- 2026-11-17 — Type and motion. Display face is now Instrument Serif (roman + italic) over
+  Schibsted Grotesk, both self-hosted in `frontend/app/fonts/` because `next/font/google` fails
+  silently here (AbortError) and substitutes Georgia — the earlier screenshots were fallback type,
+  not Fraunces. Motion language: `.enter` stagger, `.ballot-enter` settle, `.stamp`, `.mark-pop`,
+  `.link-rule`, `.option-row`, `.reveal` (view-timeline only), plus a ballot progress rule;
+  all cut by the reduced-motion block.
+- 2026-11-17 — Committed `f063029` and pushed to origin/main (`bc1533e..f063029`).
 - 2026-11-17 — Cleanup pass: removed unused tokens (`leaf`, `gold`, `moss`) and merged the duplicate
   neutrals (`line` → `rule`, `cream` → `paper`, same values, 21 call sites); deleted dead CSS
   (`.prose-note`, `.rule-band`, `.lift`), the unused `hexToBytes`/`clearCredential` in the credential
