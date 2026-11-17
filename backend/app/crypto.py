@@ -208,9 +208,27 @@ def _public_pem(key) -> bytes:
 
 
 def election_key_dir(election_id: str) -> Path:
-    path = settings.keys_dir / "elections" / election_id
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    # Reading must not try to create the directory: on a read-only serverless
+    # filesystem the mkdir itself is what failed, hiding the real cause.
+    return settings.keys_dir / "elections" / election_id
+
+
+def _required_key(path: Path, load: Callable[[bytes], object], label: str, encrypted: bool = False):
+    """Read a key file, reporting absence as a provisioning problem."""
+    try:
+        return _cached_key_file(path, load, encrypted=encrypted)
+    except FileNotFoundError as exc:
+        raise KeyMaterialError(
+            f"{label} is not provisioned on this deployment. Set KEYS_ARCHIVE_B64 "
+            "(an encrypted archive of the key directory) so the API can serve the ballot."
+        ) from exc
+    except KeyMaterialError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - unreadable key material is a setup error
+        raise KeyMaterialError(
+            f"{label} could not be read. It may have been encrypted with a different "
+            "MASTER_KEY than this deployment uses."
+        ) from exc
 
 
 def create_election_keys(election_id: str) -> dict:
@@ -220,6 +238,7 @@ def create_election_keys(election_id: str) -> dict:
     stored in the database. Returns the public material.
     """
     directory = election_key_dir(election_id)
+    directory.mkdir(parents=True, exist_ok=True)
     tally = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     signer = ed25519.Ed25519PrivateKey.generate()
 
@@ -236,31 +255,34 @@ def create_election_keys(election_id: str) -> dict:
 
 def tally_public_key(election_id: str) -> rsa.RSAPublicKey:
     path = election_key_dir(election_id) / "tally_public.pem"
-    return _cached_key_file(path, serialization.load_pem_public_key)
+    return _required_key(path, serialization.load_pem_public_key, "The election tally key")
 
 
 def tally_private_key(election_id: str) -> rsa.RSAPrivateKey:
     path = election_key_dir(election_id) / "tally_private.enc"
-    if not path.exists():
-        raise FileNotFoundError("Tally key not provisioned for this election")
-    return _cached_key_file(
-        path, lambda pem: serialization.load_pem_private_key(pem, None), encrypted=True
+    return _required_key(
+        path,
+        lambda pem: serialization.load_pem_private_key(pem, None),
+        "The election tally private key",
+        encrypted=True,
     )
 
 
 def signing_private_key(election_id: str) -> ed25519.Ed25519PrivateKey:
     path = election_key_dir(election_id) / "signing_private.enc"
-    if not path.exists():
-        raise FileNotFoundError("Signing key not provisioned for this election")
-    return _cached_key_file(
-        path, lambda pem: serialization.load_pem_private_key(pem, None), encrypted=True
+    return _required_key(
+        path,
+        lambda pem: serialization.load_pem_private_key(pem, None),
+        "The election signing private key",
+        encrypted=True,
     )
 
 
 def signing_public_key_b64(election_id: str) -> str:
     path = election_key_dir(election_id) / "signing_public.pem"
     return b64e(
-        _cached_key_file(path, serialization.load_pem_public_key).public_bytes_raw()
+        _required_key(path, serialization.load_pem_public_key, "The election signing key")
+        .public_bytes_raw()
     )
 
 
