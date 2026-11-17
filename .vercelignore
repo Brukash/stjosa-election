@@ -1,0 +1,16 @@
+# Repo-root Vercel CLI deployments must never upload local secrets or runtime data.
+# Keep this file at the repository root so both linked projects apply it.
+
+**/.env
+**/.env.*
+**/keys/
+**/keys_preview/
+**/*.db
+**/*.log
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/node_modules/
+**/.next/
+**/.vercel/
+**/*.tsbuildinfo
