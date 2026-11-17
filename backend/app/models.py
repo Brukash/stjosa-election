@@ -552,4 +552,22 @@ class ElectionDocument(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class KeyArchive(Base):
+    """The election key directory, sealed with MASTER_KEY, for hosts without a disk.
+
+    A serverless deployment has no durable filesystem and cannot read a key
+    directory shipped with the code, so every new instance used to have no keys
+    at all. The archive lets an instance restore exactly the keys the other
+    instances use. It is encrypted before it is stored, so a database dump on
+    its own reveals no key material, and it is only read when no key files
+    exist on the host.
+    """
+
+    __tablename__ = "key_archives"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default="primary")
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 Index("ix_ballot_election_cast", Ballot.election_id, Ballot.cast_at)
