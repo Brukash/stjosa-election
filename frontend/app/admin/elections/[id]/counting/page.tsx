@@ -40,6 +40,23 @@ export default function CountingPage() {
     }
   }
 
+  async function closeVoting() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/elections/${id}/status`, {
+        method: "POST",
+        auth: true,
+        body: JSON.stringify({ status: "voting_closed", note: "Voting closed from the counting console" }),
+      });
+      window.location.reload();
+    } catch (err: any) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
   async function runCount() {
     setBusy(true);
     setError("");
@@ -59,6 +76,9 @@ export default function CountingPage() {
 
   const tally = data.tally;
   const roles = new Set((data.authorisations ?? []).map((row: any) => row.role));
+  const myRoles = new Set<string>(profile?.roles ?? []);
+  const canCloseVoting =
+    can(profile, "election.view") && (myRoles.has("chairman") || myRoles.has("returning_officer"));
   const statusBlocksResults = ["draft", "configured", "approved", "accreditation_open", "voting_open"].includes(
     data.status
   );
@@ -114,9 +134,20 @@ export default function CountingPage() {
           )}
         </div>
         {data.status === "voting_open" ? (
-          <p className="mt-3 text-xs text-ink/45">
-            Voting is still open. Close voting in the Setup tab before authorising the count.
-          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p className="text-xs text-ink/45">
+              Voting is still open. Close voting before authorising the count.
+            </p>
+            {canCloseVoting ? (
+              <button className="btn-outline !py-1.5 text-xs" onClick={closeVoting} disabled={busy}>
+                Close voting now
+              </button>
+            ) : (
+              <span className="text-xs text-ink/45">
+                The Chairman or Returning Officer closes voting in the Setup &amp; verification tab.
+              </span>
+            )}
+          </div>
         ) : null}
       </Card>
 
