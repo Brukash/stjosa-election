@@ -6,7 +6,16 @@
  * service therefore signs a value it never sees, so it cannot link the issued
  * credential to the voter's ballot.
  */
-import { API_BASE } from "./api";
+import { API_BASE, ApiError, NETWORK_ERROR_MESSAGE } from "./api";
+
+async function post(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    // Same reason as lib/api: "Failed to fetch" is not a message for a voter.
+    throw new ApiError(NETWORK_ERROR_MESSAGE, 0);
+  }
+}
 
 export type Credential = { token: string; signature: string; turnout_token: string };
 export type CredentialKeys = { n: string; e: string; bits: number };
@@ -106,8 +115,8 @@ export async function issueCredential(
   accreditationToken: string,
   turnoutToken: string
 ): Promise<Credential> {
-  const keysResponse = await fetch(`${API_BASE}/api/crypto/${electionId}`, { cache: "no-store" });
-  if (!keysResponse.ok) throw new Error("Unable to load credential issuer keys");
+  const keysResponse = await post(`${API_BASE}/api/crypto/${electionId}`, { cache: "no-store" });
+  if (!keysResponse.ok) throw new Error("Unable to load the credential issuer keys");
   const keys = (await keysResponse.json()).credential as CredentialKeys;
   const n = BigInt("0x" + keys.n);
   const e = BigInt("0x" + keys.e);
@@ -120,14 +129,14 @@ export async function issueCredential(
   while (gcd(r, n) !== 1n) r = randomScalarBelow(n);
   const blinded = (hash * modPow(r, e, n)) % n;
 
-  const response = await fetch(`${API_BASE}/api/accreditation/credential`, {
+  const response = await post(`${API_BASE}/api/accreditation/credential`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ accreditation_token: accreditationToken, blinded_message: bigIntToHex(blinded) }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail ?? "Credential issuance failed");
+    throw new Error(body.detail ?? "Your credential could not be issued. Please try again.");
   }
   const data = await response.json();
   const blindSignature = BigInt("0x" + data.blind_signature);

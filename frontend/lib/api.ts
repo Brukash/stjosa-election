@@ -12,6 +12,28 @@ export class ApiError extends Error {
   }
 }
 
+// fetch() rejects with a bare "Failed to fetch" when the API is unreachable,
+// the origin is not allowed, or the network is down. That sentence is not
+// something a voter can act on, so it never reaches the page.
+export const NETWORK_ERROR_MESSAGE =
+  "We could not reach the election service. Check your connection and try again.";
+const UNREADABLE_RESPONSE_MESSAGE =
+  "The election service sent an unreadable response. Please try again.";
+
+function statusMessage(status: number): string {
+  return status >= 500
+    ? `The election service had a problem (${status}). Please try again in a moment.`
+    : `That request could not be completed (${status}). Please try again.`;
+}
+
+async function send(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new ApiError(NETWORK_ERROR_MESSAGE, 0);
+  }
+}
+
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(TOKEN_KEY);
@@ -54,20 +76,25 @@ export async function api<T = any>(
     const token = getToken();
     if (token) finalHeaders.Authorization = `Bearer ${token}`;
   }
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await send(`${API_BASE}${path}`, {
     ...rest,
     headers: finalHeaders,
     cache: "no-store",
   });
   const isJson = (response.headers.get("content-type") ?? "").includes("application/json");
-  const body = isJson ? await response.json() : await response.text();
+  let body: any;
+  try {
+    body = isJson ? await response.json() : await response.text();
+  } catch {
+    throw new ApiError(UNREADABLE_RESPONSE_MESSAGE, response.status);
+  }
   if (!response.ok) {
     const detail =
       typeof body === "object" && body?.detail
         ? typeof body.detail === "string"
           ? body.detail
           : JSON.stringify(body.detail)
-        : `Request failed (${response.status})`;
+        : statusMessage(response.status);
     throw new ApiError(detail, response.status);
   }
   return body as T;
@@ -75,13 +102,13 @@ export async function api<T = any>(
 
 export async function downloadWithAuth(path: string, filename: string): Promise<void> {
   const token = getToken();
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await send(`${API_BASE}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     cache: "no-store",
   });
   if (!response.ok) {
-    const message = await response.text();
-    throw new ApiError(message || "Download failed", response.status);
+    const message = await response.text().catch(() => "");
+    throw new ApiError(message || statusMessage(response.status), response.status);
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);

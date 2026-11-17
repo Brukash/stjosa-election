@@ -29,6 +29,14 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .config import settings
 
+class KeyMaterialError(RuntimeError):
+    """Election key material is missing or unreadable on this deployment.
+
+    Raised instead of generating a throwaway key: a credential issuer key that
+    changes between instances would invalidate credentials already given out.
+    """
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 def b64e(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -129,8 +137,21 @@ def _credential_key_paths() -> tuple[Path, Path]:
 def load_or_create_credential_key() -> rsa.RSAPrivateKey:
     priv_path, pub_path = _credential_key_paths()
     if priv_path.exists():
-        return _cached_key_file(
-            priv_path, lambda pem: serialization.load_pem_private_key(pem, None), encrypted=True
+        try:
+            return _cached_key_file(
+                priv_path, lambda pem: serialization.load_pem_private_key(pem, None), encrypted=True
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure is a provisioning problem
+            raise KeyMaterialError(
+                "The election key file could not be read. It may have been encrypted with a "
+                "different MASTER_KEY than this deployment uses."
+            ) from exc
+    if settings.is_production:
+        # No key, nowhere durable to create one, and a fresh key would break
+        # credentials issued minutes ago. Fail with something actionable.
+        raise KeyMaterialError(
+            "Election keys are not provisioned on this deployment. Set KEYS_ARCHIVE_B64 "
+            "(an encrypted archive of the key directory) so the API can serve the ballot."
         )
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     priv_path.write_text(encrypt_secret(_private_pem(key)))

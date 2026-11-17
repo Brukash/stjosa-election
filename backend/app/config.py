@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -34,6 +35,9 @@ class Settings:
     environment: str = os.getenv("ENVIRONMENT", "development")
     app_origin: str = os.getenv("APP_ORIGIN", "http://localhost:3000")
     api_origin: str = os.getenv("API_ORIGIN", "http://localhost:8000")
+    # The frontend is deployed separately from the API, so extra browser origins
+    # are configured rather than guessed (comma separated).
+    cors_extra_origins: str = os.getenv("CORS_EXTRA_ORIGINS", "")
 
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./election.db")
 
@@ -129,6 +133,30 @@ class Settings:
     @property
     def is_production(self) -> bool:
         return self.environment.strip().lower() not in {"development", "dev", "local", "test"}
+
+    @property
+    def cors_origins(self) -> list[str]:
+        origins = [self.app_origin, "http://localhost:3000", "http://127.0.0.1:3000"]
+        origins += [item.strip().rstrip("/") for item in self.cors_extra_origins.split(",")]
+        return list(dict.fromkeys(origin for origin in origins if origin))
+
+    @property
+    def cors_origin_regex(self) -> str | None:
+        """Development only: accept any loopback or private-network port.
+
+        A frontend started on another port, or a phone opening the app from the
+        host's LAN address, used to be rejected here and the page showed a bare
+        "Failed to fetch" instead of the ballot. Production keeps the exact
+        configured origins.
+        """
+        if self.is_production:
+            return None
+        return (
+            r"^https?://(localhost|127\.0\.0\.1|\[::1\]"
+            r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+            r"|192\.168\.\d{1,3}\.\d{1,3}"
+            r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$"
+        )
 
     @property
     def app_origin_is_loopback(self) -> bool:
@@ -243,6 +271,25 @@ if settings.database_url.startswith("postgres://"):
 elif settings.database_url.startswith("postgresql://"):
     settings.database_url = settings.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
-settings.keys_dir.mkdir(parents=True, exist_ok=True)
+def _writable_keys_dir(path: Path) -> Path:
+    """Return a directory that key files can actually be written to.
+
+    Serverless hosts mount the deployment read-only, so the repository-relative
+    keys directory cannot hold materialised keys. The encrypted archive is
+    restored into a writable temporary directory instead, once per instance.
+    """
+    for candidate in (path, Path(tempfile.gettempdir()) / "sjc-election-keys"):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write-probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return candidate
+        except OSError:
+            continue
+    return path
+
+
+settings.keys_dir = _writable_keys_dir(settings.keys_dir)
 
 ELECTION_REFERENCE_PREFIX = "SJCJ-ALUMNI"

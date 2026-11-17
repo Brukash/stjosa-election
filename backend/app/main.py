@@ -8,13 +8,15 @@ import tarfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .crypto import KeyMaterialError
 from .db import Base, SessionLocal, engine, get_db
 from .routers import (
     accreditation,
@@ -128,7 +130,8 @@ app.add_middleware(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.app_origin, "http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.cors_origins,
+    allow_origin_regex=settings.cors_origin_regex,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -152,6 +155,16 @@ for router in (
     webhooks.router,
 ):
     app.include_router(router, prefix="/api")
+
+
+@app.exception_handler(KeyMaterialError)
+async def key_material_problem(_request: Request, exc: KeyMaterialError) -> JSONResponse:
+    """Report missing key material as a provisioning problem, not a crash.
+
+    Without this the ballot endpoints answered a bare 500 and the cause was
+    invisible from the outside.
+    """
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.get("/api/health")

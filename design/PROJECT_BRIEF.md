@@ -111,6 +111,19 @@ No gradients, no glass, no purple, no glow.
 - 2026-11-17 — Pass 2 complete: ballot marking, review, sealed, challenge and cast screens; verify,
   results, commitments, receipt and the election chooser rebuilt. Ballot action bar is `fixed` on
   mobile (sticky was clipped by an ancestor) with a 96px spacer.
+- 2026-11-17 — Deployment drift. `backend/keys/` is git-ignored and listed in
+  `.vercelignore`, so the deployed API had no key files, tried to generate one on a read-only
+  filesystem and answered 500 on every endpoint that needs key material (`/api/public/election`,
+  `/api/public/elections/{id}`, `/api/crypto/{id}`). Keys now materialise into a writable
+  directory (the archive target falls back to the temp dir), and production without keys raises
+  `KeyMaterialError` -> 503 with the fix in the message instead of inventing a throwaway key that
+  would invalidate issued credentials.
+- 2026-11-17 — "Failed to fetch" on the accreditation page. The API's CORS allowlist only
+  accepted APP_ORIGIN plus localhost:3000, so a frontend on another port or a LAN address was
+  rejected and the raw browser sentence reached voters. Development now accepts any loopback or
+  private-network port (`settings.cors_origin_regex`), production keeps exact origins plus
+  `CORS_EXTRA_ORIGINS`, and `lib/api.ts` maps network failures and non-JSON errors to readable
+  sentences so no page can print a browser error again.
 - 2026-11-17 — Performance pass. Profiling `/api/public/election` (186 ms median, ~10x its
   siblings) showed `crypto.load_or_create_credential_key()` re-running scrypt (~100 ms) and PEM
   parsing (~67 ms) on every request. Keys are now cached in-process and keyed on the file's
