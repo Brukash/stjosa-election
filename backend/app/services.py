@@ -223,23 +223,26 @@ def election_summary(db: Session, election: Election) -> dict:
 def public_key_material(election: Election) -> dict:
     """The public key material published for an election.
 
-    Read from the election row first. These values are exactly what the key
-    files produced, and a host without the files (a serverless deployment, where
-    the key directory is not shipped) could otherwise not render the public
-    page at all.
+    The credential key is read from the running key material first, because a
+    browser blinds its credential with the value published here and the service
+    signs that credential with its own key. Publishing the copy stored on the
+    election row, which is a snapshot from whenever keys were generated, meant
+    a host whose key files had been replaced signed with a key the browser never
+    saw, and every credential failed to unblind. The row stays as the fallback
+    for a host that holds no key files at all, so the public page still renders.
     """
-    stored = (election.credential_public_key or "").strip()
     credential = None
-    if stored.startswith("{"):
-        try:
-            credential = json.loads(stored)
-        except ValueError:
-            credential = None
+    try:
+        credential = crypto.credential_public_numbers()
+    except crypto.KeyMaterialError:
+        credential = None
     if credential is None:
-        try:
-            credential = crypto.credential_public_numbers()
-        except crypto.KeyMaterialError:
-            credential = None
+        stored = (election.credential_public_key or "").strip()
+        if stored.startswith("{"):
+            try:
+                credential = json.loads(stored)
+            except ValueError:
+                credential = None
     return {
         "tally_public_key": election.tally_public_key,
         "signing_public_key": crypto.signing_public_b64_from_pem(election.signing_public_key),

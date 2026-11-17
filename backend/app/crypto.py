@@ -135,6 +135,37 @@ def _credential_key_paths() -> tuple[Path, Path]:
     )
 
 
+def _publish_key_file_once(path: Path, payload: str) -> bool:
+    """Create ``path`` exactly once, atomically, so no reader sees a partial key.
+
+    Writing straight into the destination left a window where a second worker
+    found the file, read it half-written, and failed to decrypt it. The payload
+    is written beside the destination and hard-linked into place, which is atomic
+    and fails when another worker already published the key.
+    """
+    if path.exists():
+        return False
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp")
+    temp.write_text(payload, encoding="utf-8")
+    try:
+        try:
+            os.link(temp, path)
+        except FileExistsError:
+            return False
+        except OSError:
+            # A filesystem without hard links: publish by atomic replace, which
+            # still never exposes a partially written file.
+            if path.exists():
+                return False
+            os.replace(temp, path)
+        return True
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def load_or_create_credential_key() -> rsa.RSAPrivateKey:
     priv_path, pub_path = _credential_key_paths()
     if priv_path.exists():
@@ -147,14 +178,22 @@ def load_or_create_credential_key() -> rsa.RSAPrivateKey:
                 "The election key file could not be read. It may have been encrypted with a "
                 "different MASTER_KEY than this deployment uses."
             ) from exc
-    if settings.is_production:
-        # No key, nowhere durable to create one, and a fresh key would break
-        # credentials issued minutes ago. Fail with something actionable.
+    if settings.is_production or not settings.keys_dir_is_durable:
+        # No key, and nowhere this process can put one that other processes
+        # share. Generating here gave every serverless instance its own
+        # credential key: the browser blinds a credential with the published
+        # key, so a ballot signed by another instance never unblinded. Fail
+        # with something actionable instead of issuing unusable credentials.
         raise KeyMaterialError(
             "Election keys are not provisioned on this deployment." + _provisioning_hint()
         )
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    priv_path.write_text(encrypt_secret(_private_pem(key)))
+    if not _publish_key_file_once(priv_path, encrypt_secret(_private_pem(key))):
+        # Another process won the race to create the key. Use its key so every
+        # process signs with the same credential key the first one published.
+        return _cached_key_file(
+            priv_path, lambda pem: serialization.load_pem_private_key(pem, None), encrypted=True
+        )
     pub_path.write_text(_public_pem(key.public_key()).decode())
     return key
 

@@ -51,6 +51,19 @@ def public_election() -> dict:
     return data["election"]
 
 
+def published_credential_key(election_id: str) -> tuple[int, int]:
+    """The key a browser blinds with: what the API publishes, never a local file.
+
+    Reading the key from this machine would hide the failure this test exists to
+    catch, because a credential key that differs between processes is what
+    makes an unblinded credential fail to verify.
+    """
+    data = call("GET", f"/crypto/{election_id}")
+    key = data.get("credential")
+    assert key, "the API published no credential issuer key"
+    return int(key["n"], 16), int(key["e"], 16)
+
+
 def issue_credential(election: dict, voter_id: str) -> dict:
     verified = call("POST", "/accreditation/verify-voter", json={
         "election_id": election["id"], "voter_id": voter_id,
@@ -58,8 +71,7 @@ def issue_credential(election: dict, voter_id: str) -> dict:
     assert verified["voter"]["voter_id"] == voter_id, "Voter ID verification returned another voter"
     reference = election["reference"]
     token_hex = secrets.token_hex(32)
-    numbers = crypto.credential_public_numbers()
-    n, e = int(numbers["n"], 16), int(numbers["e"], 16)
+    n, e = published_credential_key(election["id"])
     message_hash = crypto.fdh(crypto.credential_message(reference, token_hex), n)
     while True:
         blinding = secrets.randbelow(n - 2) + 2
@@ -70,8 +82,15 @@ def issue_credential(election: dict, voter_id: str) -> dict:
         "accreditation_token": verified["accreditation_token"],
         "blinded_message": format(blinded, "x"),
     })
+    issued = signed.get("credential_public_key") or {}
+    assert issued.get("n") == format(n, "x"), (
+        "the API signed the credential with a different key than the one it published"
+    )
     unblinded = (int(signed["blind_signature"], 16) * pow(blinding, -1, n)) % n
-    assert pow(unblinded, e, n) == message_hash, "unblinded credential does not verify"
+    assert pow(unblinded, e, n) == message_hash, (
+        "unblinded credential does not verify: the API signed with a different "
+        "credential key than the one it published"
+    )
     return {
         "token": token_hex,
         "signature": format(unblinded, "x"),

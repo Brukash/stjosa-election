@@ -125,6 +125,10 @@ class Settings:
 
     seed_password: str = os.getenv("SEED_DEFAULT_PASSWORD", "ChangeMe!2026")
     keys_dir: Path = Path(os.getenv("KEYS_DIR", str(BASE_DIR / "keys")))
+    # False when the configured directory could not be written and key files had
+    # to go to a temporary directory. Such a directory does not outlive the
+    # process, so keys generated there would differ between instances.
+    keys_dir_is_durable: bool = True
     jwt_algorithm: str = "HS256"
 
     # Ballot preparation lifetime: an uncast prepared ballot expires.
@@ -271,25 +275,27 @@ if settings.database_url.startswith("postgres://"):
 elif settings.database_url.startswith("postgresql://"):
     settings.database_url = settings.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
-def _writable_keys_dir(path: Path) -> Path:
+def _writable_keys_dir(path: Path) -> tuple[Path, bool]:
     """Return a directory that key files can actually be written to.
 
     Serverless hosts mount the deployment read-only, so the repository-relative
     keys directory cannot hold materialised keys. The encrypted archive is
     restored into a writable temporary directory instead, once per instance.
+    The second value says whether that directory is the configured one, because
+    material placed in the temporary fallback is not shared between processes.
     """
-    for candidate in (path, Path(tempfile.gettempdir()) / "sjc-election-keys"):
+    for index, candidate in enumerate((path, Path(tempfile.gettempdir()) / "sjc-election-keys")):
         try:
             candidate.mkdir(parents=True, exist_ok=True)
             probe = candidate / ".write-probe"
             probe.write_text("ok", encoding="utf-8")
             probe.unlink()
-            return candidate
+            return candidate, index == 0
         except OSError:
             continue
-    return path
+    return path, False
 
 
-settings.keys_dir = _writable_keys_dir(settings.keys_dir)
+settings.keys_dir, settings.keys_dir_is_durable = _writable_keys_dir(settings.keys_dir)
 
 ELECTION_REFERENCE_PREFIX = "SJCJ-ALUMNI"
