@@ -57,7 +57,13 @@ def _database_archive() -> tuple[str | None, str | None]:
                 return None, None
             return crypto.decrypt_secret(row.ciphertext).decode(), None
     except Exception as exc:  # noqa: BLE001 - a missing table or unreadable row is not fatal
-        return None, f"the database key archive: {type(exc).__name__}: {exc}"
+        return None, f"the database key archive: {_brief(exc)}"
+
+
+def _brief(exc: Exception) -> str:
+    """One short line, so a driver error never fills the screen with SQL."""
+    line = (str(exc).strip().splitlines() or [""])[0].strip()
+    return f"{type(exc).__name__}: {line[:120]}" if line else type(exc).__name__
 
 
 def _extract(archive: str) -> None:
@@ -100,7 +106,7 @@ def ensure_keys_materialized() -> None:
             try:
                 _extract(archive)
             except Exception as exc:  # noqa: BLE001 - reported below with the source
-                failures.append(f"{label}: {type(exc).__name__}: {exc}")
+                failures.append(f"{label}: {_brief(exc)}")
                 continue
             _LAST_ERROR = None
             return
