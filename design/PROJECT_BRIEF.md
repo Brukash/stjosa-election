@@ -111,6 +111,11 @@ No gradients, no glass, no purple, no glow.
 - 2026-11-17 — Pass 2 complete: ballot marking, review, sealed, challenge and cast screens; verify,
   results, commitments, receipt and the election chooser rebuilt. Ballot action bar is `fixed` on
   mobile (sticky was clipped by an ancestor) with a 96px spacer.
+- 2026-11-17 — Performance pass. Profiling `/api/public/election` (186 ms median, ~10x its
+  siblings) showed `crypto.load_or_create_credential_key()` re-running scrypt (~100 ms) and PEM
+  parsing (~67 ms) on every request. Keys are now cached in-process and keyed on the file's
+  (mtime, size), and gzip was added for responses over 500 B. Measured after: 13.6 ms median,
+  5871 B -> 3024 B. Public pages serve in 9-41 ms from a production build.
 - 2026-11-17 — Type and motion. Display face is now Instrument Serif (roman + italic) over
   Schibsted Grotesk, both self-hosted in `frontend/app/fonts/` because `next/font/google` fails
   silently here (AbortError) and substitutes Georgia — the earlier screenshots were fallback type,

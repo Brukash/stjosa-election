@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
@@ -116,6 +117,13 @@ app = FastAPI(
         "commitment lists, verifiable counting and audited results declaration."
     ),
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    GZipMiddleware,
+    # JSON payloads of a few KB compress to a fraction of their size; tiny
+    # responses stay uncompressed because the header costs more than it saves.
+    minimum_size=500,
 )
 
 app.add_middleware(

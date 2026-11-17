@@ -18,7 +18,10 @@ import hmac
 import json
 import os
 import secrets
+import threading
+from functools import lru_cache
 from pathlib import Path
+from typing import Callable
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
@@ -44,11 +47,42 @@ def sha256_hex(*parts: str) -> str:
     return digest.hexdigest()
 
 
+@lru_cache(maxsize=4)
+def _derive_master_key(secret: str) -> bytes:
+    # scrypt is deliberately slow (~100 ms); it only needs to run once per process.
+    return hashlib.scrypt(
+        secret.encode(), salt=b"sjc-election-master-key", n=2**14, r=8, p=1, dklen=32
+    )
+
+
 def _master_key() -> bytes:
     # Derive a 256-bit key-encryption-key from the configured master secret.
-    return hashlib.scrypt(
-        settings.master_key.encode(), salt=b"sjc-election-master-key", n=2**14, r=8, p=1, dklen=32
-    )
+    return _derive_master_key(settings.master_key)
+
+
+# Keys read from disk were decrypted (scrypt) and PEM-parsed on every use, which
+# cost a public page ~170 ms. Cache the loaded objects and key the cache on the
+# file's (mtime, size) so a rotated key is picked up without a restart.
+_KEY_CACHE: dict[tuple[str, int, int], object] = {}
+_KEY_CACHE_LOCK = threading.Lock()
+_KEY_CACHE_LIMIT = 64
+
+
+def _cached_key_file(path: Path, load: Callable[[bytes], object], encrypted: bool = False):
+    stamp = path.stat()
+    cache_key = (str(path), stamp.st_mtime_ns, stamp.st_size)
+    cached = _KEY_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    payload = path.read_bytes()
+    if encrypted:
+        payload = decrypt_secret(payload.decode())
+    key = load(payload)
+    with _KEY_CACHE_LOCK:
+        if len(_KEY_CACHE) >= _KEY_CACHE_LIMIT:
+            _KEY_CACHE.clear()
+        _KEY_CACHE[cache_key] = key
+    return key
 
 
 def encrypt_secret(plaintext: bytes) -> str:
@@ -95,7 +129,9 @@ def _credential_key_paths() -> tuple[Path, Path]:
 def load_or_create_credential_key() -> rsa.RSAPrivateKey:
     priv_path, pub_path = _credential_key_paths()
     if priv_path.exists():
-        return serialization.load_pem_private_key(decrypt_secret(priv_path.read_text()), None)
+        return _cached_key_file(
+            priv_path, lambda pem: serialization.load_pem_private_key(pem, None), encrypted=True
+        )
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     priv_path.write_text(encrypt_secret(_private_pem(key)))
     pub_path.write_text(_public_pem(key.public_key()).decode())
@@ -179,26 +215,32 @@ def create_election_keys(election_id: str) -> dict:
 
 def tally_public_key(election_id: str) -> rsa.RSAPublicKey:
     path = election_key_dir(election_id) / "tally_public.pem"
-    return serialization.load_pem_public_key(path.read_bytes())
+    return _cached_key_file(path, serialization.load_pem_public_key)
 
 
 def tally_private_key(election_id: str) -> rsa.RSAPrivateKey:
     path = election_key_dir(election_id) / "tally_private.enc"
     if not path.exists():
         raise FileNotFoundError("Tally key not provisioned for this election")
-    return serialization.load_pem_private_key(decrypt_secret(path.read_text()), None)
+    return _cached_key_file(
+        path, lambda pem: serialization.load_pem_private_key(pem, None), encrypted=True
+    )
 
 
 def signing_private_key(election_id: str) -> ed25519.Ed25519PrivateKey:
     path = election_key_dir(election_id) / "signing_private.enc"
     if not path.exists():
         raise FileNotFoundError("Signing key not provisioned for this election")
-    return serialization.load_pem_private_key(decrypt_secret(path.read_text()), None)
+    return _cached_key_file(
+        path, lambda pem: serialization.load_pem_private_key(pem, None), encrypted=True
+    )
 
 
 def signing_public_key_b64(election_id: str) -> str:
     path = election_key_dir(election_id) / "signing_public.pem"
-    return b64e(serialization.load_pem_public_key(path.read_bytes()).public_bytes_raw())
+    return b64e(
+        _cached_key_file(path, serialization.load_pem_public_key).public_bytes_raw()
+    )
 
 
 def election_sign(election_id: str, payload: bytes) -> str:
