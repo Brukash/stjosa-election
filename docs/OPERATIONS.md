@@ -60,7 +60,65 @@ column and remains part of the schema history. Registration notices use
 `supabase/migrations/0004_registration_notifications.sql` for per-channel sent timestamps and a
 `purpose` column on `notification_deliveries`; the API adds those columns defensively as well.
 
-### Email — Resend (recommended)
+### Email — cPanel SMTP (recommended for this election)
+
+The association's cPanel mailbox replaces Resend. A cPanel account has no 100-per-day API cap, so
+150 registration notices plus 150 vote confirmations fit in one day; the only limits are the host's
+hourly message cap and its simultaneous-connection cap.
+
+1. **Create the sending mailbox.** cPanel → *Email Accounts* → *Create*. Use an address on the
+   election domain, for example `no-reply@elections.cbncoopng.com`. Keep the password in cPanel and
+   in the Vercel environment only — never in the repository or in chat.
+2. **Read the outgoing server settings.** cPanel → *Email Accounts* → *Connect Devices* (or *Mail
+   Client Manual Settings*) shows the outgoing server. It is normally `mail.<your-domain>` plus:
+   **465** for SSL/TLS (implicit TLS, recommended) or **587** for STARTTLS. Port 25 is blocked by
+   Vercel and must not be used.
+3. **Set the Vercel environment variables** (Project → Settings → Environment Variables →
+   Production) and redeploy:
+
+   | Variable | Value |
+   | --- | --- |
+   | `EMAIL_PROVIDER` | `smtp` |
+   | `EMAIL_FROM` | `SJC Jos Alumni Election <no-reply@elections.cbncoopng.com>` |
+   | `SMTP_HOST` | exact host from step 2, e.g. `mail.elections.cbncoopng.com` |
+   | `SMTP_PORT` | `465` |
+   | `SMTP_USERNAME` | the **full** mailbox address |
+   | `SMTP_PASSWORD` | the mailbox password |
+   | `SMTP_SSL` | `true` on port 465. On 587 set `SMTP_STARTTLS=true` and leave `SMTP_SSL` unset |
+   | `SMTP_MAX_CONNECTIONS` | `3` (default); cPanel blocks mailboxes that open too many connections |
+
+   `EMAIL_FROM` must be that mailbox, or an alias on the same domain: cPanel refuses a sender it
+   does not host. Remove `RESEND_API_KEY` once SMTP works so the deployment cannot fall back
+   silently.
+4. **Authenticate the domain.** cPanel → *Email Deliverability* → *Repair* for the domain. Confirm
+   SPF and DKIM are **Valid**. DKIM must be enabled before the rehearsal, or Gmail and Outlook will
+   junk bulk notices.
+5. **Verify before election day.** With the same variables in `backend/.env`:
+
+   ```bash
+   cd backend
+   .venv/Scripts/python.exe scripts/check_delivery.py --to-email you@example.org
+   ```
+
+   The report must say `sent <Message-ID>`. Then open `/admin/delivery` on the deployed API as the
+   Super Administrator: Email must show the `smtp` provider and `configured: true`.
+
+**Ask the host for two numbers.** The per-hour message limit for the domain (commonly 200–500/hour
+on shared hosting) and the simultaneous SMTP connection cap. 150 registration notices plus 150 vote
+confirmations is 300 messages: if the hourly cap is 200 or lower, approve the register in batches of
+about 50, since the app records each voter's sent channel and only retries the missing ones.
+
+**Troubleshooting.**
+
+| Symptom | Cause |
+| --- | --- |
+| `smtp delivery failed: SMTPAuthenticationError` | Wrong mailbox or password; `SMTP_USERNAME` must be the full address |
+| `smtp delivery failed: SMTPSenderRefused` | `EMAIL_FROM` is not a mailbox or alias on this cPanel account |
+| `smtp delivery failed: SMTPServerDisconnected` or timeout | Wrong host/port pairing — 465 with `SMTP_SSL=true`, or 587 with `SMTP_STARTTLS=true` |
+| Delivered but lands in spam | DKIM disabled or SPF missing in *Email Deliverability* |
+| `smtp delivery failed: SMTPRecipientsRefused` | The recipient's server rejected the address on the register |
+
+### Email — Resend (optional)
 
 1. Create a Resend account and add the sending domain (for example `elections.sjcjos-alumni.org`).
 2. Add the SPF and DKIM records Resend provides, wait for domain verification, then set a DMARC
@@ -69,10 +127,6 @@ column and remains part of the schema history. Registration notices use
    `EMAIL_FROM="SJC Jos Alumni Election <no-reply@elections.sjcjos-alumni.org>"`.
 4. Send a test registration notice to a committee mailbox and confirm inbox placement.
 
-### Email — SMTP fallback
-
-`EMAIL_PROVIDER=smtp` plus `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
-`SMTP_STARTTLS=true`. Works with the association's existing mail host.
 
 ### WhatsApp — Meta WhatsApp Business Platform / Cloud API
 

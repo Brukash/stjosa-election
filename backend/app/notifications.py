@@ -17,12 +17,13 @@ from __future__ import annotations
 import base64
 import html
 import smtplib
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
-from email.utils import formataddr, parseaddr
+from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -193,7 +194,15 @@ def provider_status() -> list[dict]:
                 "EMAIL_FROM",
             ]
             if _email_provider() == "resend"
-            else ["EMAIL_PROVIDER=smtp", "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD"],
+            else [
+                "EMAIL_PROVIDER=smtp",
+                "EMAIL_FROM",
+                "SMTP_HOST",
+                "SMTP_PORT",
+                "SMTP_USERNAME",
+                "SMTP_PASSWORD",
+                "SMTP_SSL=true (port 465) or SMTP_STARTTLS=true (port 587)",
+            ],
         },
         {
             "channel": "sms",
@@ -364,30 +373,67 @@ def _send_resend(
         return None, "email provider returned an invalid response"
 
 
+_SMTP_SLOTS: threading.Semaphore | None = None
+_SMTP_SLOTS_LOCK = threading.Lock()
+
+
+def _smtp_slots() -> threading.Semaphore:
+    """Shared cap on simultaneous SMTP connections.
+
+    Shared cPanel/Exim hosting limits concurrent connections per mailbox and
+    temporarily blocks a mailbox that exceeds them, so a 150-voter batch must
+    not open one connection per worker thread.
+    """
+    global _SMTP_SLOTS
+    with _SMTP_SLOTS_LOCK:
+        if _SMTP_SLOTS is None:
+            _SMTP_SLOTS = threading.Semaphore(max(1, settings.smtp_max_connections))
+        return _SMTP_SLOTS
+
+
 def _send_smtp(
     destination: str,
     subject: str,
     body: str,
+    html_body: str | None = None,
     *,
     timeout_seconds: int | None = None,
 ) -> tuple[str | None, str | None]:
+    """Send through an authenticated SMTP mailbox such as cPanel's.
+
+    Port 465 uses implicit TLS (SMTP_SSL); port 587 uses STARTTLS. The envelope
+    sender is EMAIL_FROM, which cPanel only accepts when the mailbox belongs to
+    the same account (or is an alias on that domain).
+    """
     message = EmailMessage()
     display_name, address = parseaddr(settings.email_from)
-    message["From"] = formataddr((display_name or "SJC Alumni Election", address or settings.email_from))
+    sender_address = address or settings.email_from
+    sender_domain = sender_address.partition("@")[2] or None
+    message["From"] = formataddr((display_name or "SJC Alumni Election", sender_address))
     message["To"] = destination
     message["Subject"] = subject
+    message["Date"] = formatdate(localtime=True)
+    message["Message-ID"] = make_msgid(domain=sender_domain)
     message.set_content(body)
+    if html_body:
+        message.add_alternative(html_body, subtype="html")
+    use_ssl = settings.smtp_ssl or settings.smtp_port == 465
     try:
         timeout = timeout_seconds or settings.otp_delivery_timeout_seconds
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=timeout) as server:
-            server.ehlo()
-            if settings.smtp_starttls:
-                server.starttls()
+        with _smtp_slots():
+            if use_ssl:
+                server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=timeout)
+            else:
+                server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=timeout)
+            with server:
                 server.ehlo()
-            if settings.smtp_username:
-                server.login(settings.smtp_username, settings.smtp_password)
-            server.send_message(message)
-        return None, None
+                if not use_ssl and settings.smtp_starttls:
+                    server.starttls()
+                    server.ehlo()
+                if settings.smtp_username:
+                    server.login(settings.smtp_username, settings.smtp_password)
+                server.send_message(message)
+        return str(message["Message-ID"]), None
     except (smtplib.SMTPException, OSError) as exc:
         return None, f"smtp delivery failed: {type(exc).__name__}"
 
@@ -527,7 +573,7 @@ def _send_registration_email(voter: Voter, election: Election) -> DeliveryResult
     try:
         subject, text, html_body = _registration_email_body(election, voter)
         if provider == "smtp":
-            message_id, error = _send_smtp(destination, subject, text)
+            message_id, error = _send_smtp(destination, subject, text, html_body)
         elif provider == "resend":
             message_id, error = _send_resend(destination, subject, text, html_body)
         else:
@@ -784,6 +830,7 @@ def _send_vote_confirmation_email(
                 destination,
                 subject,
                 text,
+                html_body,
                 timeout_seconds=settings.vote_confirmation_timeout_seconds,
             )
         elif provider == "resend":
@@ -1022,7 +1069,7 @@ def _attempt_delivery(
     if option.channel == "email":
         try:
             if option.provider == "smtp":
-                message_id, error = _send_smtp(destination, subject, email_text)
+                message_id, error = _send_smtp(destination, subject, email_text, email_html)
             else:
                 message_id, error = _send_resend(destination, subject, email_text, email_html)
         except Exception as exc:

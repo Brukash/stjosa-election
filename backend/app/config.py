@@ -64,6 +64,11 @@ class Settings:
     smtp_username: str = os.getenv("SMTP_USERNAME", "")
     smtp_password: str = os.getenv("SMTP_PASSWORD", "")
     smtp_starttls: bool = _bool("SMTP_STARTTLS", True)
+    # cPanel/Exim on port 465 requires implicit TLS (SMTPS); on 587 use STARTTLS.
+    smtp_ssl: bool = _bool("SMTP_SSL", False)
+    # Shared cPanel hosts cap simultaneous SMTP connections per mailbox, so
+    # notification batches must not open one connection per worker.
+    smtp_max_connections: int = _int("SMTP_MAX_CONNECTIONS", 3)
 
     # Termii is the required SMS gateway. Twilio remains available only as a
     # legacy fallback for deployments that have not migrated yet.
