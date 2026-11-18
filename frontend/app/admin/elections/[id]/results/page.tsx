@@ -132,6 +132,11 @@ export default function ResultsAdminPage() {
               className="btn-primary"
               onClick={approve}
               disabled={busy || status !== "under_review"}
+              title={
+                status === "under_review"
+                  ? undefined
+                  : "Waiting for the Returning Officer to submit the provisional results for review."
+              }
             >
               Approve and declare results
             </button>
@@ -147,6 +152,19 @@ export default function ResultsAdminPage() {
             </a>
           ) : null}
         </div>
+        {can(profile, "results.approve") && status === "provisional_results" ? (
+          <p className="mt-3 text-xs text-ink/60">
+            Approval is locked until the Returning Officer submits the provisional results for review.
+            That step must be completed from the Returning Officer account; once it is, this button
+            unlocks and the declaration is signed and versioned in your name as Chairman.
+          </p>
+        ) : null}
+        {can(profile, "results.approve") && status === "under_review" ? (
+          <p className="mt-3 text-xs text-ink/60">
+            The provisional figures have been submitted. Declaring them publishes the signed result and
+            emails every approved voter.
+          </p>
+        ) : null}
       </Card>
 
       {provisional ? (
