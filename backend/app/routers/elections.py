@@ -500,13 +500,17 @@ def approve_configuration(
             position.approved = True
         for candidate in candidates:
             candidate.approved = True
-        keys = crypto.create_election_keys(election.id)
-        election.tally_public_key = keys["tally_public_key"]
-        election.signing_public_key = keys["signing_public_key"]
-        # Keep the encrypted key files with the election: this deployment's disk
-        # is discarded between instances, so counting would otherwise be impossible.
-        election.key_material = keys["key_material"]
-        election.credential_public_key = json.dumps(crypto.credential_public_numbers())
+        # Keys are created once, on the approval that completes dual control. A
+        # second completing approval must never replace them: every ballot cast
+        # so far is encrypted to the existing tally key and would be lost.
+        if not election.tally_public_key:
+            keys = crypto.create_election_keys(election.id)
+            election.tally_public_key = keys["tally_public_key"]
+            election.signing_public_key = keys["signing_public_key"]
+            # The encrypted bundle rides on the election row, so this deployment's
+            # disk being discarded between instances cannot lose it.
+            election.key_material = keys["key_material"]
+            election.credential_public_key = json.dumps(crypto.credential_public_numbers())
         election.status = "approved"
         election.approved_by = profile.id
         election.approved_at = now()

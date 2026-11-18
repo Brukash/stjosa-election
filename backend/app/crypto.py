@@ -378,7 +378,6 @@ def create_election_keys(election_id: str) -> dict:
     material and the bundle; plaintext private keys never leave this function.
     """
     directory = election_key_dir(election_id)
-    directory.mkdir(parents=True, exist_ok=True)
     tally = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     signer = ed25519.Ed25519PrivateKey.generate()
 
@@ -388,8 +387,15 @@ def create_election_keys(election_id: str) -> dict:
         "signing_private.enc": encrypt_secret(_private_pem(signer)),
         "signing_public.pem": _public_pem(signer.public_key()).decode(),
     }
-    for name in ELECTION_KEY_FILES:
-        (directory / name).write_text(material[name], encoding="utf-8")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in ELECTION_KEY_FILES:
+            (directory / name).write_text(material[name], encoding="utf-8")
+    except OSError:
+        # The bundle returned below is what counting reads, and it travels with
+        # the election. A read-only or full disk on the instance that happens to
+        # approve the configuration must not block the election.
+        pass
 
     return {
         "tally_public_key": material["tally_public.pem"],

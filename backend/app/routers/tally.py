@@ -356,12 +356,17 @@ def get_tally(
     election = get_election(db, election_id)
     run = _latest_completed_run(db, election.id, run_id)
     keys_available = crypto.election_keys_available(election.id)
+    # A brand-new election has no keys yet: they are generated when dual-control
+    # configuration approval completes. That is different from keys that once
+    # existed and are gone, and the console must not confuse the two.
+    keys_provisioned = bool(election.tally_public_key)
     if not run:
         return {
             "election_id": election.id,
             "status": election.status,
             "tally": None,
             "keys_available": keys_available,
+            "keys_provisioned": keys_provisioned,
             "authorisations": _authorisations(db, election.id),
             "dual_control_ready": _dual_control_ready(db, election.id)[0],
         }
@@ -370,6 +375,7 @@ def get_tally(
         "status": election.status,
         "tally": tally_payload(db, election, run),
         "keys_available": keys_available,
+        "keys_provisioned": keys_provisioned,
         "authorisations": _authorisations(db, election.id),
         "dual_control_ready": _dual_control_ready(db, election.id)[0],
         "stats": election_stats(db, election.id),

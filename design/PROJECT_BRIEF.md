@@ -179,3 +179,12 @@ No gradients, no glass, no purple, no glow.
   rather than recording every ballot as invalid. Checked against the production rows:
   `SJCJ-2026-9BFBF2` and `SJCJ-TEST-161636` report unavailable, `SJCJ-ALUMNI-2026` and
   `SJCJ-2026-F48E8E` report available.
+- 2026-11-18 — Counting must never depend on which server approved the election. `create_election_keys`
+  now treats the on-disk copy as a cache: a read-only or full disk no longer blocks configuration
+  approval, because the encrypted bundle on the row is written regardless. Approval also only creates
+  keys when the election has none yet, so a later completing approval cannot rotate a key that ballots
+  were already encrypted to. The tally payload distinguishes `keys_provisioned` (never created yet →
+  "Keys are created when configuration is approved") from lost keys, so a fresh election is not shown
+  the fatal panel. Proved locally: keys created, the key directory deleted to mimic a discarded
+  instance, then signing, 3072-bit tally load, ballot encrypt/decrypt and file rematerialisation all
+  succeeded from the row alone.

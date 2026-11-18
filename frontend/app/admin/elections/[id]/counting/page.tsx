@@ -79,6 +79,9 @@ export default function CountingPage() {
   // Without private key material nothing on this page can ever succeed, so the
   // console says so once instead of offering buttons that return an error.
   const keysAvailable = data.keys_available !== false;
+  // Keys that were never created yet (configuration not approved) are not the
+  // same as keys that were created and lost; only the second is fatal.
+  const keysProvisioned = data.keys_provisioned !== false;
   const roles = new Set((data.authorisations ?? []).map((row: any) => row.role));
   const myRoles = new Set<string>(profile?.roles ?? []);
   const canCloseVoting =
@@ -92,7 +95,24 @@ export default function CountingPage() {
       {error ? <Alert tone="error">{error}</Alert> : null}
       {notice ? <Alert tone="success">{notice}</Alert> : null}
 
-      {keysAvailable ? null : (
+      {keysAvailable ? null : !keysProvisioned ? (
+        <Card className="card-pad">
+          <SectionHeading eyebrow="Keys pending" title="Keys are created when configuration is approved">
+            The tally key and the record-signing key are generated once the Chairman and the
+            Returning Officer approve the configuration together. Until that approval completes
+            there are no keys to count with.
+          </SectionHeading>
+          <p className="mt-3 text-sm leading-relaxed text-ink/60">
+            The keys are saved with the election the moment they are created, so counting works on
+            whichever server handles it — not only the one that created them.
+          </p>
+          <div className="mt-4">
+            <Link href={`/admin/elections/${id}`} className="btn-outline">
+              Open setup &amp; verification
+            </Link>
+          </div>
+        </Card>
+      ) : (
         <Card className="card-pad">
           <SectionHeading eyebrow="Keys missing" title="This election cannot be counted">
             The private keys for this election were never saved with it, and the machine that
