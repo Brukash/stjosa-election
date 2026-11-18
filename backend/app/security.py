@@ -173,7 +173,8 @@ PERMISSIONS: dict[str, set[str]] = {
         "election.create", "election.edit", "election.approve", "election.view",
         "register.view", "register.import", "register.approve", "verification.configure",
         "verification.approve", "monitor.view", "ballot.view_public",
-        "counting.authorise", "tally.view", "results.review", "results.approve", "results.publish",
+        "counting.authorise", "tally.view", "results.review", "results.submit", "results.approve",
+        "results.publish",
         "audit.view", "accreditation.oversight", "commitments.view", "lifecycle.manage",
     },
     ACCREDITATION: {

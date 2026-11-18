@@ -119,6 +119,11 @@ def audit_report(db: Session, election: Election) -> dict:
         and run.reconciliation.get("balanced")
         and run.accepted_ballots == run.valid_ballots + run.invalid_ballots
     )
+    submission = next((a for a in approvals if a.stage == "provisional_review"), None)
+    final_approval = next((a for a in approvals if a.stage == "final_approval"), None)
+    single_official = bool(
+        submission and final_approval and submission.approver_id == final_approval.approver_id
+    )
     checks = [
         {"check": "Only eligible alumni were accredited", "passed": accredited_ineligible == 0 and accredited <= eligible,
          "evidence": f"{accredited} accredited of {eligible} eligible; {accredited_ineligible} ineligible accreditations"},
@@ -133,7 +138,11 @@ def audit_report(db: Session, election: Election) -> dict:
                       if run else "no completed count")},
         {"check": "Final results were properly authorised",
          "passed": bool(declaration and signature_valid and any(a.stage == "final_approval" for a in approvals)),
-         "evidence": f"declaration v{declaration.version} signature valid: {signature_valid}" if declaration else "not declared"},
+         "evidence": (
+             f"declaration v{declaration.version} signature valid: {signature_valid}"
+             + ("; submitted and declared by one official" if single_official
+                else "; submitted and declared by two officials" if declaration else "")
+         ) if declaration else "not declared"},
         {"check": "Configuration was approved by two officials",
          "passed": len({a.approver_role for a in config_approvals}) >= 2,
          "evidence": f"{len(config_approvals)} configuration approval(s): "
@@ -182,6 +191,7 @@ def audit_report(db: Session, election: Election) -> dict:
                 "declaration_version": declaration.version if declaration else None,
                 "declared_at": declaration.declared_at.isoformat() if declaration else None,
                 "signature_valid": signature_valid,
+                "single_official_declaration": single_official,
                 "approvals": [
                     {"stage": a.stage, "role": a.approver_role, "status": a.approval_status,
                      "at": a.created_at.isoformat()}

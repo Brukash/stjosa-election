@@ -86,7 +86,7 @@ coercion and vote-buying risk.
 | Control | Implementation |
 | --- | --- |
 | No admin can see selections | Ballot tables have no voter FK; decryption requires the tally key (counting service, dual control) |
-| No single official can declare results | Returning Officer submits, Chairman approves; `result_approvals` records both |
+| Results need two stages of official sign-off | Returning Officer submits, Chairman approves; `result_approvals` records both. The Chairman may complete both stages (single-official path), which is recorded in the approval comments, audit log and election events |
 | No single official can approve configuration | Chairman + Returning Officer approvals required before keys are provisioned |
 | Super Admin restrictions | Permission matrix excludes approval, verification configuration, counting and declaration |
 | Verification freeze | `elections.locked_at` + `election_verification_settings.locked_at` set atomically on first accepted ballot; settings endpoints reject updates |

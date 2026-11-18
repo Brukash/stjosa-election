@@ -17,6 +17,7 @@ import json
 import math
 import os
 import secrets
+import subprocess
 import sys
 import tempfile
 import threading
@@ -24,6 +25,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 TMP = Path(tempfile.mkdtemp(prefix="sjc-results-notification-test-"))
+# The child process runs its own mock provider, so it takes a second port.
+MOCK_PORT = int(os.environ.get("SJC_TEST_EMAIL_PORT", "8898"))
 os.environ.update(
     {
         "DATABASE_URL": f"sqlite:///{TMP / 'test.db'}",
@@ -34,7 +37,7 @@ os.environ.update(
         "EMAIL_PROVIDER": "resend",
         "RESEND_API_KEY": "test-resend-key",
         "EMAIL_FROM": "SJC Election <election@example.test>",
-        "EMAIL_API_BASE": "http://127.0.0.1:8898",
+        "EMAIL_API_BASE": f"http://127.0.0.1:{MOCK_PORT}",
         "DEMO_SEED": "true",
         "SEED_DEFAULT_PASSWORD": "ChangeMe!2026",
     }
@@ -47,12 +50,24 @@ from sqlalchemy import select  # noqa: E402
 from app import crypto  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Election, NotificationDelivery, ResultDeclaration, Voter  # noqa: E402
+from app.models import (  # noqa: E402
+    AuditLog,
+    Election,
+    ElectionEvent,
+    NotificationDelivery,
+    ResultApproval,
+    ResultDeclaration,
+    Voter,
+)
 from app.notifications import (  # noqa: E402
     _result_lines,
     mask_email,
     notify_results_declared,
 )
+
+# The same flow runs twice: once with the Returning Officer submitting (the
+# two-official path) and once, in a child process, with the Chairman doing both.
+SINGLE_OFFICIAL = os.environ.get("SJC_TEST_SINGLE_OFFICIAL") == "1"
 
 PASSWORD = "ChangeMe!2026"
 RESULTS_SUBJECT = "Official results declared"
@@ -214,7 +229,7 @@ def check_result_lines() -> None:
 
 def main() -> None:
     check_result_lines()
-    server = ThreadingHTTPServer(("127.0.0.1", 8898), MockEmailProvider)
+    server = ThreadingHTTPServer(("127.0.0.1", MOCK_PORT), MockEmailProvider)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
     with TestClient(app) as client:
@@ -231,7 +246,8 @@ def main() -> None:
             (chair, f"/api/tally/{election_id}/authorise", None),
             (returning, f"/api/tally/{election_id}/authorise", None),
             (returning, f"/api/tally/{election_id}/run", None),
-            (returning, f"/api/results/{election_id}/submit", {"comments": "Ready for approval"}),
+            (chair if SINGLE_OFFICIAL else returning, f"/api/results/{election_id}/submit",
+             {"comments": "Ready for approval"}),
         ):
             response = client.post(path, headers=headers, **({"json": payload} if payload else {}))
             assert response.status_code == 200, (path, response.status_code, response.text)
@@ -365,6 +381,55 @@ def main() -> None:
         assert payload["figures"]["positions"]
         ok("a rejected recipient does not break or roll back the declaration")
 
+        # ── who signed each stage, and whether one official did both ────────
+        with SessionLocal() as db:
+            approvals = db.execute(
+                select(ResultApproval).where(ResultApproval.election_id == election_id)
+                .order_by(ResultApproval.created_at)
+            ).scalars().all()
+            by_stage = {approval.stage: approval for approval in approvals}
+            submission = by_stage["provisional_review"]
+            declaration_approval = by_stage["final_approval"]
+            assert submission.approver_role == (
+                "chairman" if SINGLE_OFFICIAL else "returning_officer"
+            ), submission.approver_role
+            assert declaration_approval.approver_role == "chairman"
+            if SINGLE_OFFICIAL:
+                assert submission.approver_id == declaration_approval.approver_id
+                assert "single-official" in (submission.comments or "").lower()
+                assert "single-official" in (declaration_approval.comments or "").lower()
+            else:
+                assert submission.approver_id != declaration_approval.approver_id
+            assert payload["single_official_declaration"] is SINGLE_OFFICIAL
+
+            declared_audit = db.execute(
+                select(AuditLog).where(
+                    AuditLog.election_id == election_id,
+                    AuditLog.action == "results.declare",
+                )
+            ).scalars().first()
+            assert declared_audit.detail["single_official"] is SINGLE_OFFICIAL, declared_audit.detail
+            submitted_audit = db.execute(
+                select(AuditLog).where(
+                    AuditLog.election_id == election_id,
+                    AuditLog.action == "results.submit",
+                )
+            ).scalars().first()
+            assert submitted_audit.detail["single_official"] is SINGLE_OFFICIAL
+            declared_event = db.execute(
+                select(ElectionEvent).where(
+                    ElectionEvent.election_id == election_id,
+                    ElectionEvent.event_type == "results.declared",
+                )
+            ).scalars().first()
+            assert ("by one official" in declared_event.message) is SINGLE_OFFICIAL, \
+                declared_event.message
+        ok(
+            "the Chairman completes both stages alone, recorded as a single-official declaration"
+            if SINGLE_OFFICIAL
+            else "the Returning Officer submits and the Chairman declares, recorded as two officials"
+        )
+
         # ── total provider outage: nothing raises, nothing is rolled back ───
         FAIL_ADDRESSES.clear()
         FAIL_ADDRESSES.update({
@@ -409,6 +474,25 @@ def main() -> None:
         ok("a total provider outage raises nothing and leaves the declaration intact")
 
     server.shutdown()
+    server.server_close()
+
+    if not SINGLE_OFFICIAL:
+        # The Chairman-only path needs its own database and email mock, so it runs
+        # in a child process of this same script.
+        child = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve())],
+            env={
+                **os.environ,
+                "SJC_TEST_SINGLE_OFFICIAL": "1",
+                "SJC_TEST_EMAIL_PORT": "8899",
+            },
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        assert child.returncode == 0, (child.stdout[-4000:], child.stderr[-4000:])
+        ok("the Chairman-only path passes in its own run")
+
     print("\n" + "=" * 72)
     print(f"DECLARED-RESULT EMAIL TESTS PASSED: {len(PASSED)} checks")
     print("=" * 72)

@@ -88,6 +88,11 @@ Cannot:
 | Run counting | — | — | ✅ | — | — |
 | Submit/publish results | — | submit | ✅ | — | — |
 | Approve/declare results | — | ✅ | — | — | — |
+
+When no Returning Officer submission has been made, the Chairman can complete both the submission
+and the declaration in one session. Both `result_approvals` rows name the same account, and the
+comments, audit log detail (`single_official: true`) and election events state that one official
+did both.
 | View tally and count proofs | — | ✅ | ✅ | — | — |
 | View monitoring/audit | ✅ | ✅ | ✅ | limited | ✅ |
 | Accreditation console / exceptions | — | view | — | ✅ | — |

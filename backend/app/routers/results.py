@@ -267,17 +267,33 @@ def submit_results(
         raise HTTPException(status.HTTP_409_CONFLICT, "Counting has not been completed")
     if election.status != "provisional_results":
         raise HTTPException(status.HTTP_409_CONFLICT, "Provisional results are not awaiting submission")
+    # The office the account is acting in, so the trail names the real official.
+    role_key = "chairman" if has_permission(roles_for(db, profile.id), "results.approve") else "returning_officer"
+    single_official = role_key == "chairman"
+    comments = (payload.comments or "").strip()
+    if single_official:
+        comments = (
+            f"{comments} Single-official path: the Chairman submitted the provisional "
+            "figures and will also approve and declare the result."
+        ).strip()
     db.add(ResultApproval(
         election_id=election.id, tally_run_id=run.id, stage="provisional_review",
-        approver_id=profile.id, approver_role="returning_officer",
-        approval_status="submitted", comments=payload.comments,
+        approver_id=profile.id, approver_role=role_key,
+        approval_status="submitted", comments=comments,
     ))
     election.status = "under_review"
     record_audit(db, action="results.submit", election_id=election.id, actor_id=profile.id,
-                 entity="tally_run", entity_id=run.id, ip_address=client_ip(request))
+                 actor_role=role_key, entity="tally_run", entity_id=run.id,
+                 ip_address=client_ip(request),
+                 detail={"role": role_key, "single_official": single_official,
+                         "submitted_by": profile.id})
     db.add(ElectionEvent(
         election_id=election.id, event_type="results.submitted",
-        message="Returning Officer submitted provisional results for approval",
+        message=(
+            f"Provisional results submitted for approval by the {role_key.replace('_', ' ')}"
+            + (" (single-official completion: the same account will declare them)"
+               if single_official else "")
+        ),
         actor_id=profile.id,
     ))
     db.commit()
@@ -297,23 +313,44 @@ def approve_and_declare(
     run = _latest_run(db, election.id)
     if not run:
         raise HTTPException(status.HTTP_409_CONFLICT, "Counting has not been completed")
+    submission = db.execute(
+        select(ResultApproval).where(
+            ResultApproval.election_id == election.id,
+            ResultApproval.stage == "provisional_review",
+        ).order_by(ResultApproval.created_at.desc())
+    ).scalars().first()
+    single_official = bool(submission and submission.approver_id == profile.id)
+    comments = (
+        "Official results approved and declared by the same official who submitted the "
+        "provisional figures. Single-official completion: the two-official control was "
+        "not exercised."
+        if single_official else "Official results approved and declared"
+    )
     db.add(ResultApproval(
         election_id=election.id, tally_run_id=run.id, stage="final_approval",
         approver_id=profile.id, approver_role="chairman", approval_status="approved",
-        comments="Official results approved and declared",
+        comments=comments,
     ))
     declaration = _declare(db, election, run, profile)
     election.status = "declared"
     record_audit(db, action="results.declare", election_id=election.id, actor_id=profile.id,
                  entity="result_declaration", entity_id=declaration.id, ip_address=client_ip(request),
-                 detail={"version": declaration.version, "hash": declaration.signed_payload_hash})
+                 detail={"version": declaration.version, "hash": declaration.signed_payload_hash,
+                         "single_official": single_official,
+                         "submitted_by": submission.approver_id if submission else None})
     db.add(ElectionEvent(
         election_id=election.id, event_type="results.declared",
-        message=f"Official results declared (version {declaration.version})", actor_id=profile.id,
+        message=(
+            f"Official results declared (version {declaration.version})"
+            + (" by one official: the same account submitted and declared the result"
+               if single_official else "")
+        ),
+        actor_id=profile.id,
     ))
     db.commit()
     db.refresh(declaration)
     payload = declaration_dict(db, declaration, election)
+    payload["single_official_declaration"] = single_official
     # The declaration is already committed, so voters' result emails can never
     # delay or roll it back. The delivery summary is reported back to the admin.
     try:

@@ -51,7 +51,10 @@ export default function ResultsAdminPage() {
         delivered && typeof delivered.email_sent === "number"
           ? ` Voter result emails: ${delivered.email_sent} sent, ${delivered.email_failed} failed, ${delivered.email_unavailable} unavailable.`
           : "";
-      setNotice(`Official results declared (version ${declaration.version}) and digitally signed.${emails}`);
+      const solo = declaration?.single_official_declaration
+        ? " Recorded as a single-official declaration: the same account submitted and declared."
+        : "";
+      setNotice(`Official results declared (version ${declaration.version}) and digitally signed.${solo}${emails}`);
       load();
     } catch (err: any) {
       setError(err.message);
@@ -135,7 +138,7 @@ export default function ResultsAdminPage() {
               title={
                 status === "under_review"
                   ? undefined
-                  : "Waiting for the Returning Officer to submit the provisional results for review."
+                  : "Submit the provisional results first; approval opens once they are in review."
               }
             >
               Approve and declare results
@@ -154,15 +157,14 @@ export default function ResultsAdminPage() {
         </div>
         {can(profile, "results.approve") && status === "provisional_results" ? (
           <p className="mt-3 text-xs text-ink/60">
-            Approval is locked until the Returning Officer submits the provisional results for review.
-            That step must be completed from the Returning Officer account; once it is, this button
-            unlocks and the declaration is signed and versioned in your name as Chairman.
+            You can complete both steps yourself: submit the provisional figures, then declare them. The
+            approval trail, election events and audit log record that one official did both.
           </p>
         ) : null}
         {can(profile, "results.approve") && status === "under_review" ? (
           <p className="mt-3 text-xs text-ink/60">
-            The provisional figures have been submitted. Declaring them publishes the signed result and
-            emails every approved voter.
+            The provisional figures are in review. Declaring them publishes the signed result and emails
+            every approved voter.
           </p>
         ) : null}
       </Card>
