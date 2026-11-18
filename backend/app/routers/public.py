@@ -9,12 +9,14 @@ from ..models import Election
 from ..schemas import STATUS_LABELS
 from ..services import (
     election_summary,
-    find_current_election,
+    VOTER_FACING_STATUSES,
+    find_voter_election,
     get_settings_row,
     maybe_auto_close,
     public_election_payload,
     public_settings_dict,
     resolve_public_election,
+    voter_facing_elections,
 )
 from ..security import ROLE_NAMES, PERMISSIONS
 
@@ -25,10 +27,14 @@ ACTIVE_PUBLIC_STATUSES = ("accreditation_open", "voting_open")
 
 @router.get("/election")
 def current_election(db: Session = Depends(get_db)):
-    election = find_current_election(db)
+    election = find_voter_election(db)
+    if election:
+        maybe_auto_close(db, election)
+    if not election or election.status not in VOTER_FACING_STATUSES:
+        # The closing time may just have passed; nothing may be on offer now.
+        election = find_voter_election(db)
     if not election:
         return {"election": None, "published_results": False}
-    maybe_auto_close(db, election)
     settings = get_settings_row(db, election.id)
     return {
         "election": public_election_payload(db, election),
@@ -47,15 +53,14 @@ def election_by_id(election_id: str, db: Session = Depends(get_db)):
 @router.get("/active-elections")
 def active_elections(db: Session = Depends(get_db)):
     """Elections a member can currently accredit or vote in."""
-    rows = (
-        db.query(Election)
-        .filter(Election.status.in_(ACTIVE_PUBLIC_STATUSES))
-        .order_by(Election.created_at.desc())
-        .all()
-    )
+    rows = voter_facing_elections(db)
     for election in rows:
         maybe_auto_close(db, election)
     rows = [election for election in rows if election.status in ACTIVE_PUBLIC_STATUSES]
+    # Once the Chairman names the election voters should see, the chooser offers only it.
+    chosen = [election for election in rows if election.voter_visible]
+    if chosen:
+        rows = chosen
     return {
         "elections": [
             {

@@ -139,7 +139,7 @@ export default function HomePage() {
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
-            {election && !ballotOpen ? (
+            {data && !ballotOpen ? (
               <Link href="/results" className="btn-primary w-full sm:w-auto">
                 Read the declared results
               </Link>
@@ -275,8 +275,11 @@ export default function HomePage() {
                 : "The ballot opens when the committee says so."}
             </p>
           </div>
-          <Link href="/accredit" className="btn-primary w-full sm:w-auto">
-            Start voting
+          <Link
+            href={data && !ballotOpen ? "/results" : "/accredit"}
+            className="btn-primary w-full sm:w-auto"
+          >
+            {data && !ballotOpen ? "Read the declared results" : "Start voting"}
           </Link>
         </div>
       </section>

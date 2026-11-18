@@ -73,6 +73,10 @@ class StatusUpdate(BaseModel):
     note: str | None = None
 
 
+class VoterVisibility(BaseModel):
+    visible: bool
+
+
 class PositionCreate(BaseModel):
     title: str
     description: str = ""

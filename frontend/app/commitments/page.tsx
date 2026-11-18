@@ -11,9 +11,10 @@ export default function CommitmentsPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api("/api/public/election")
+    // The record belongs to the counted election, which is closed to voters by then.
+    api("/api/results/public/current")
       .then((payload) => {
-        if (!payload.election) throw new Error("No election is available");
+        if (!payload.election) throw new Error("No election record is available yet");
         return api(`/api/commitments/${payload.election.id}`);
       })
       .then(setData)

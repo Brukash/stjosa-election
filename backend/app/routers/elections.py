@@ -33,10 +33,13 @@ from ..schemas import (
     PositionUpdate,
     StatusUpdate,
     VerificationSettingsUpdate,
+    VoterVisibility,
 )
 from ..services import (
     ALLOWED_TRANSITIONS,
+    CLOSED_STATUSES,
     CONFIG_LOCKED_STATUSES,
+    VOTER_FACING_STATUSES,
     LIFECYCLE_ORDER,
     configuration_hash,
     configuration_payload,
@@ -587,6 +590,56 @@ def transition_status(
                  detail={"from": previous, "to": target, "note": payload.note})
     db.commit()
     return {"status": election.status, "previous": previous, "label": STATUS_LABELS.get(target)}
+
+
+@router.post("/{election_id}/voter-visibility")
+def set_voter_visibility(
+    election_id: str,
+    payload: VoterVisibility,
+    request: Request,
+    profile: Profile = Depends(get_current_profile),
+    db: Session = Depends(get_db),
+):
+    """Let the Chairman name the election the public voting pages show."""
+    election = get_election(db, election_id)
+    roles = roles_for(db, profile.id)
+    if not ({"chairman", "super_admin"} & roles):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the Electoral Committee Chairman can choose the election voters see",
+        )
+    if payload.visible and election.status in CLOSED_STATUSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, "A closed election cannot be shown to voters")
+    if payload.visible:
+        others = db.execute(
+            select(Election).where(Election.voter_visible.is_(True), Election.id != election.id)
+        ).scalars().all()
+        for other in others:
+            other.voter_visible = False
+            db.add(ElectionEvent(
+                election_id=other.id, event_type="voter.visibility",
+                message=f"{other.title} was removed from the voter pages by the Chairman",
+                actor_id=profile.id,
+            ))
+    election.voter_visible = payload.visible
+    db.add(ElectionEvent(
+        election_id=election.id, event_type="voter.visibility",
+        message=(
+            f"{election.title} is now the election shown to voters" if payload.visible
+            else f"{election.title} is no longer shown to voters"
+        ),
+        actor_id=profile.id,
+    ))
+    record_audit(db, action="election.voter_visibility", election_id=election.id,
+                 actor_id=profile.id, entity="election", entity_id=election.id,
+                 ip_address=client_ip(request),
+                 detail={"visible": payload.visible, "status": election.status})
+    db.commit()
+    return {
+        "id": election.id,
+        "voter_visible": election.voter_visible,
+        "voter_facing": election.status in VOTER_FACING_STATUSES,
+    }
 
 
 # ── exceptional changes ──────────────────────────────────────────────────────

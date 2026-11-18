@@ -100,6 +100,8 @@ class Election(Base, TimestampMixin):
     configuration_hash: Mapped[str | None] = mapped_column(String(128))
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The Chairman marks the one election the public voting pages show.
+    voter_visible: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     tally_public_key: Mapped[str | None] = mapped_column(Text)
     signing_public_key: Mapped[str | None] = mapped_column(Text)

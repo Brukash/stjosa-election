@@ -109,28 +109,37 @@ def find_results_election(db: Session) -> Election | None:
     return find_active_election(db)
 
 
-# The public home page and published-record page follow the election the
-# association is furthest through, so a declared result outranks an older ballot
-# that was left open. Archived elections step aside for the current cycle.
-CURRENT_STATUS_ORDER = ("declared", "under_review", "provisional_results", "counting",
-                        "voting_closed", "voting_open", "accreditation_open", "approved",
-                        "configured", "draft")
+# A voter may only act on an election that is open for accreditation or voting.
+# Everything past voting_open is closed: officials still see it in the admin
+# workspace, but the public pages must never offer it.
+VOTER_FACING_STATUSES = ("accreditation_open", "voting_open")
+CLOSED_STATUSES = ("voting_closed", "counting", "provisional_results", "under_review",
+                   "declared", "archived")
 
 
-def find_current_election(db: Session) -> Election | None:
-    for state in CURRENT_STATUS_ORDER:
-        election = db.execute(
-            select(Election).where(Election.status == state).order_by(Election.created_at.desc())
-        ).scalars().first()
-        if election:
+def voter_facing_elections(db: Session) -> list[Election]:
+    rows = db.execute(
+        select(Election).where(Election.status.in_(VOTER_FACING_STATUSES))
+        .order_by(Election.created_at.desc())
+    ).scalars().all()
+    return list(rows)
+
+
+def find_voter_election(db: Session) -> Election | None:
+    """The election voters see: the Chairman's choice when it is open, else the newest open one."""
+    rows = voter_facing_elections(db)
+    for election in rows:
+        if election.voter_visible:
             return election
-    return None
+    return rows[0] if rows else None
 
 
 def resolve_public_election(db: Session, election_id: str | None) -> Election:
-    election = get_election(db, election_id) if election_id else find_current_election(db)
+    election = get_election(db, election_id) if election_id else find_voter_election(db)
     if not election:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No election is available")
+    if election.status in CLOSED_STATUSES:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This election is closed and is no longer shown to voters")
     return election
 
 
@@ -244,6 +253,8 @@ def election_summary(db: Session, election: Election) -> dict:
         "timezone": election.timezone,
         "configuration_hash": election.configuration_hash,
         "locked_at": election.locked_at.isoformat() if election.locked_at else None,
+        "voter_visible": election.voter_visible,
+        "voter_facing": election.status in VOTER_FACING_STATUSES,
         "verification": verification_settings_dict(settings),
         "totals": {
             "eligible_voters": eligible,

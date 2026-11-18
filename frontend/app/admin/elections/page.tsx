@@ -5,6 +5,15 @@ import { useEffect, useState } from "react";
 import { Alert, Card, Loading, SectionHeading, StatusPill } from "@/components/ui";
 import { api, can, formatDate, getProfile } from "@/lib/api";
 
+const CLOSED_STATUSES = [
+  "voting_closed",
+  "counting",
+  "provisional_results",
+  "under_review",
+  "declared",
+  "archived",
+];
+
 const BLANK = {
   title: "",
   year: new Date().getFullYear() + 1,
@@ -16,6 +25,7 @@ const BLANK = {
 export default function ElectionsAdminPage() {
   const profile = getProfile();
   const canCreate = can(profile, "election.create");
+  const canChooseElection = can(profile, "election.create");
   const [elections, setElections] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -47,6 +57,31 @@ export default function ElectionsAdminPage() {
       await api("/api/elections", { method: "POST", auth: true, body: JSON.stringify(payload) });
       setNotice("Election created. Configure positions, candidates and verification settings next.");
       setForm(BLANK);
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setVisibility(electionId: string, visible: boolean) {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api(`/api/elections/${electionId}/voter-visibility`, {
+        method: "POST",
+        auth: true,
+        body: JSON.stringify({ visible }),
+      });
+      setNotice(
+        !result.voter_visible
+          ? "That election is hidden from voters again."
+          : result.voter_facing
+            ? "Voters now see this election."
+            : "Saved. Voters see it as soon as accreditation opens.",
+      );
       load();
     } catch (err: any) {
       setError(err.message);
@@ -96,6 +131,32 @@ export default function ElectionsAdminPage() {
             <p className="mt-3 text-[11px] text-ink/45">
               Voting {formatDate(election.opens_at)} → {formatDate(election.closes_at)}
             </p>
+            {election.voter_visible ? (
+              <div className="mt-3 rounded-lg border border-forest/30 bg-forest/[0.04] px-3 py-2">
+                <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-forest">
+                  Shown to voters
+                </p>
+                <p className="mt-1 text-[11.5px] leading-relaxed text-ink/60">
+                  {election.voter_facing
+                    ? "This is the election on the public voting pages."
+                    : "It appears to voters once accreditation opens."}
+                </p>
+              </div>
+            ) : null}
+            {CLOSED_STATUSES.includes(election.status) ? (
+              <p className="mt-3 text-[11px] text-ink/45">
+                Closed elections are never shown to voters.
+              </p>
+            ) : null}
+            {canChooseElection && !CLOSED_STATUSES.includes(election.status) ? (
+              <button
+                className={`mt-3 w-full ${election.voter_visible ? "btn-outline" : "btn-primary"}`}
+                disabled={busy}
+                onClick={() => setVisibility(election.id, !election.voter_visible)}
+              >
+                {election.voter_visible ? "Hide from voters" : "Show to voters"}
+              </button>
+            ) : null}
             <Link href={`/admin/elections/${election.id}`} className="btn-outline mt-4 w-full">
               Open workspace
             </Link>

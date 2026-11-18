@@ -65,6 +65,8 @@ def _ensure_compatibility_columns() -> None:
     _ensure_column("voters", "has_voted_at", "TIMESTAMPTZ", "DATETIME")
     _ensure_column("notification_deliveries", "purpose",
                    "VARCHAR(20) NOT NULL DEFAULT 'otp'", "VARCHAR(20) NOT NULL DEFAULT 'otp'")
+    _ensure_column("elections", "voter_visible", "BOOLEAN NOT NULL DEFAULT FALSE",
+                   "BOOLEAN NOT NULL DEFAULT FALSE")
 
 
 # Serverless hosts may never send the ASGI startup event, so the archive is
