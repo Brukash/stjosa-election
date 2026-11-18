@@ -143,8 +143,10 @@ def audit_report(db: Session, election: Election) -> dict:
              + ("; submitted and declared by one official" if single_official
                 else "; submitted and declared by two officials" if declaration else "")
          ) if declaration else "not declared"},
-        {"check": "Configuration was approved by two officials",
-         "passed": len({a.approver_role for a in config_approvals}) >= 2,
+        # One recorded approval is the rule since the committee retired the
+        # two-person requirement; the evidence names who approved.
+        {"check": "Configuration approval was recorded",
+         "passed": len(config_approvals) >= 1,
          "evidence": f"{len(config_approvals)} configuration approval(s): "
                      f"{', '.join(sorted({a.approver_role for a in config_approvals})) or 'none'}"},
         {"check": "No unauthorised administrative activity succeeded",

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import secrets
 import sys
 
@@ -20,7 +21,9 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 sys.path.insert(0, ".")
 from app import crypto  # noqa: E402
 
-BASE = "http://127.0.0.1:8000/api"
+# Point the run at another instance with SMOKE_BASE, so a throwaway database can
+# be exercised without disturbing the development one.
+BASE = os.getenv("SMOKE_BASE", "http://127.0.0.1:8000/api")
 PASSED: list[str] = []
 
 

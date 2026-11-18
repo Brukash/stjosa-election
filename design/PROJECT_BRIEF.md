@@ -196,4 +196,8 @@ No gradients, no glass, no purple, no glow.
   Returning Officer office still exists so existing accounts keep working, but no step requires it.
   Trade-off accepted knowingly: a single compromised Chairman account can now complete every stage;
   the audit trail, signed evidence and published commitments are what remain as independent checks.
-  This supersedes the separation-of-duties claims in earlier entries.
+  This supersedes the separation-of-duties claims in earlier entries. The full mock election then exposed
+  one leftover: the audit report still demanded two configuration approvals, so a Chairman-only
+  election would have shown a failed compliance check. It now checks that an approval was recorded
+  and names the official. `scripts/smoke_test.py` also takes `SMOKE_BASE` so it can be run against a
+  throwaway database instead of the development one.
