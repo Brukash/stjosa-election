@@ -216,6 +216,11 @@ def run_tally(
             valid_count += 1
             for candidate_id in selections.values():
                 counts[candidate_id] = counts.get(candidate_id, 0) + 1
+        except crypto.KeyMaterialError:
+            # Missing key material is a deployment fault, not a bad ballot. Left
+            # to the handler below it would record every ballot as invalid and
+            # publish a tally that silently disagrees with the ballot box.
+            raise
         except Exception:
             counted = False
             invalid_count += 1
@@ -350,11 +355,13 @@ def get_tally(
 ):
     election = get_election(db, election_id)
     run = _latest_completed_run(db, election.id, run_id)
+    keys_available = crypto.election_keys_available(election.id)
     if not run:
         return {
             "election_id": election.id,
             "status": election.status,
             "tally": None,
+            "keys_available": keys_available,
             "authorisations": _authorisations(db, election.id),
             "dual_control_ready": _dual_control_ready(db, election.id)[0],
         }
@@ -362,6 +369,7 @@ def get_tally(
         "election_id": election.id,
         "status": election.status,
         "tally": tally_payload(db, election, run),
+        "keys_available": keys_available,
         "authorisations": _authorisations(db, election.id),
         "dual_control_ready": _dual_control_ready(db, election.id)[0],
         "stats": election_stats(db, election.id),

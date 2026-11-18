@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Alert, Card, Loading, SectionHeading, Stat } from "@/components/ui";
@@ -75,6 +76,9 @@ export default function CountingPage() {
   if (!data) return <Loading label="Loading counting dashboard…" />;
 
   const tally = data.tally;
+  // Without private key material nothing on this page can ever succeed, so the
+  // console says so once instead of offering buttons that return an error.
+  const keysAvailable = data.keys_available !== false;
   const roles = new Set((data.authorisations ?? []).map((row: any) => row.role));
   const myRoles = new Set<string>(profile?.roles ?? []);
   const canCloseVoting =
@@ -88,6 +92,31 @@ export default function CountingPage() {
       {error ? <Alert tone="error">{error}</Alert> : null}
       {notice ? <Alert tone="success">{notice}</Alert> : null}
 
+      {keysAvailable ? null : (
+        <Card className="card-pad">
+          <SectionHeading eyebrow="Keys missing" title="This election cannot be counted">
+            The private keys for this election were never saved with it, and the machine that
+            generated them no longer holds a copy. Ballots already cast were encrypted to that key,
+            so they cannot be decrypted now — and a new key cannot open them without making the
+            record untrue.
+          </SectionHeading>
+          <p className="mt-3 text-sm leading-relaxed text-ink/60">
+            Create a fresh election for this ballot. Elections created now keep their keys with the
+            election, so counting works even after the server is replaced. This one stays on record
+            with its ballots unreadable.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link href="/admin/elections" className="btn-primary">
+              Create a replacement election
+            </Link>
+            <Link href={`/admin/elections/${id}`} className="btn-outline">
+              Review this election
+            </Link>
+          </div>
+        </Card>
+      )}
+
+      {keysAvailable ? (
       <Card className="card-pad">
         <SectionHeading eyebrow="Dual control" title="Authorise counting">
           Counting requires the Chairman and the Returning Officer to authorise independently. Tally
@@ -150,6 +179,7 @@ export default function CountingPage() {
           </div>
         ) : null}
       </Card>
+      ) : null}
 
       {statusBlocksResults ? (
         <Card className="card-pad">
@@ -247,7 +277,7 @@ export default function CountingPage() {
             </p>
           </Card>
         </>
-      ) : !statusBlocksResults ? (
+      ) : !statusBlocksResults && keysAvailable ? (
         <Card className="card-pad">
           <p className="text-sm text-ink/60">
             No completed count yet. Authorise with both officials, then run the automated count.

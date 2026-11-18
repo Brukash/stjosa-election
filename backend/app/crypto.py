@@ -351,6 +351,24 @@ def _election_key_payload(election_id: str, name: str, label: str) -> bytes:
     )
 
 
+def election_keys_available(election_id: str) -> bool:
+    """Whether this deployment holds the election's private key material.
+
+    An election created while keys still lived only on the host's disk has
+    neither its files nor a stored bundle, and nothing can bring them back. The
+    console checks this before offering counting, so officials are not invited
+    to authorise a count that cannot run. Nothing is decrypted here.
+    """
+    directory = election_key_dir(election_id)
+    try:
+        if all((directory / name).is_file() for name in ELECTION_KEY_FILES):
+            return True
+    except OSError:
+        pass
+    bundle = stored_key_bundle(election_id)
+    return all(isinstance(bundle.get(name), str) for name in ELECTION_KEY_FILES)
+
+
 def create_election_keys(election_id: str) -> dict:
     """Generate tally (RSA-OAEP) and record-signing (Ed25519) key pairs.
 

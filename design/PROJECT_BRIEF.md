@@ -171,3 +171,11 @@ No gradients, no glass, no purple, no glow.
   `scripts/backfill_key_material.py` copies on-disk keys onto their rows. Ciphertext only; plaintext
   keys still never touch the database and no endpoint returns the column. Elections `9f677830` and
   `66ca2910` were keyed only on a discarded instance and cannot be recovered; they must be recreated.
+- 2026-11-18 — The counting console still invited officials to authorise a count that could never
+  run on such an election, and the button only produced a 503. The tally payload now reports
+  `keys_available`, checked without decrypting anything (the four key files or the stored bundle),
+  and the counting page renders a "This election cannot be counted" panel with a link to create a
+  replacement instead of the dual-control buttons. Counting also re-raises `KeyMaterialError`
+  rather than recording every ballot as invalid. Checked against the production rows:
+  `SJCJ-2026-9BFBF2` and `SJCJ-TEST-161636` report unavailable, `SJCJ-ALUMNI-2026` and
+  `SJCJ-2026-F48E8E` report available.
