@@ -10,8 +10,10 @@ the backend on every route, not by the interface.
 | Method | Path | Purpose | Notes |
 | --- | --- | --- | --- |
 | GET | `/health` | Service + database health | |
-| GET | `/public/election` | Active election, ballot, verification settings, public keys | FR105–FR111 |
-| GET | `/public/elections/{id}` | Public configuration of one election | |
+| GET | `/public/election` | Active election, ballot, verification settings, public keys | FR105–FR111; the Chairman's pick when set, otherwise the newest open election; `election: null` when nothing is open |
+| GET | `/public/active-elections` | Elections a voter can accredit or vote in | Open elections only; narrowed to the Chairman's pick when one is set |
+| GET | `/public/elections` | Voter-facing election index | Open elections only; closed elections are never listed |
+| GET | `/public/elections/{id}` | Public configuration of one election | 409 for a closed election |
 | POST | `/accreditation/verify-voter` | Validate the Voter ID against the approved register; create accreditation + short session | Voter ID is sent by email when the register is approved; no OTP |
 | GET/POST | `/webhooks/whatsapp` | Meta verification and delivery-status callbacks | POST requires `X-Hub-Signature-256`; no message content or full contact stored |
 | POST | `/accreditation/credential` | Sign a **blinded** credential request | One active issuance per voter/election |

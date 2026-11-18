@@ -5,10 +5,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Election
 from ..schemas import STATUS_LABELS
 from ..services import (
-    election_summary,
     VOTER_FACING_STATUSES,
     find_voter_election,
     get_settings_row,
@@ -82,14 +80,34 @@ def active_elections(db: Session = Depends(get_db)):
 
 @router.get("/elections")
 def elections_index(db: Session = Depends(get_db)):
-    rows = db.query(Election).order_by(Election.created_at.desc()).limit(20).all()
+    """The voter-facing index: only elections a voter can act on.
+
+    Closed elections are never listed here. They stay visible to officials in the
+    admin workspace and, once declared, on the public results and record pages.
+    """
+    rows = voter_facing_elections(db)
+    for election in rows:
+        maybe_auto_close(db, election)
+    rows = [election for election in rows if election.status in VOTER_FACING_STATUSES]
+    chosen = [election for election in rows if election.voter_visible]
+    if chosen:
+        rows = chosen
     return {
         "elections": [
             {
-                **election_summary(db, e),
+                "id": election.id,
+                "title": election.title,
+                "reference": election.reference,
+                "year": election.year,
+                "status": election.status,
+                "status_label": STATUS_LABELS.get(election.status, election.status),
+                "opens_at": election.opens_at.isoformat() if election.opens_at else None,
+                "closes_at": election.closes_at.isoformat() if election.closes_at else None,
+                "can_accredit": election.status in ACTIVE_PUBLIC_STATUSES,
+                "can_vote": election.status == "voting_open",
                 "ballot": None,
             }
-            for e in rows
+            for election in rows
         ]
     }
 
