@@ -1048,23 +1048,87 @@ def notify_vote_submitted_by_id(
 
 
 # ── declared results ────────────────────────────────────────────────────────
+def _vote_label(count: int) -> str:
+    return f"{count} vote" if count == 1 else f"{count} votes"
+
+
+def _name_list(names: list[str]) -> str:
+    if len(names) <= 1:
+        return names[0] if names else ""
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 def _result_lines(figures: dict) -> list[tuple[str, str]]:
-    """One readable line per position: the declared winner(s) and the vote counts."""
+    """One readable line per position: the declared outcome, with no name repeated.
+
+    A tie at the available seats is stated as a tie and names the tied
+    candidates. It is never rendered as "no candidate returned", which would
+    misstate an official result, and a candidate is named once per line.
+    """
     lines: list[tuple[str, str]] = []
     for position in figures.get("positions") or []:
         title = str(position.get("title") or "Position")
-        candidates = position.get("candidates") or []
-        winners = [name for name in (position.get("winners") or []) if name]
-        if winners:
-            headline = ", ".join(winners)
-        elif candidates:
-            headline = "No candidate returned"
+        entries = [
+            {
+                "index": index,
+                "name": str(entry.get("full_name") or "Candidate"),
+                "votes": int(entry.get("votes") or 0),
+            }
+            for index, entry in enumerate(position.get("candidates") or [])
+        ]
+        if not entries:
+            lines.append((title, "No candidates stood for this position."))
+            continue
+
+        ranked = sorted(entries, key=lambda entry: entry["votes"], reverse=True)
+        seats = max(int(position.get("seats") or 1), 1)
+        if not any(entry["votes"] > 0 for entry in ranked):
+            lines.append((title, "No votes were cast for this position."))
+            continue
+
+        # The last available seat sets the winning bar. A group level with more
+        # candidates than seats left is an unresolved tie, never a silent win.
+        cutoff = ranked[min(seats, len(ranked)) - 1]["votes"]
+        elected = [entry for entry in ranked if entry["votes"] > cutoff]
+        contested = [entry for entry in ranked if entry["votes"] == cutoff]
+        remaining = seats - len(elected)
+        named = list(elected)
+
+        if cutoff > 0 and len(contested) > remaining:
+            tie_names = _name_list([entry["name"] for entry in contested])
+            if elected:
+                summary = "Elected: " + ", ".join(
+                    f"{entry['name']} ({_vote_label(entry['votes'])})" for entry in elected
+                )
+                summary += (
+                    f". Tie for the remaining {'seat' if remaining == 1 else 'seats'}: "
+                    f"{tie_names} on {_vote_label(cutoff)} each - no winner returned."
+                )
+                named = elected + contested
+            else:
+                summary = f"Tie: {tie_names} on {_vote_label(cutoff)} each - no winner returned."
+                named = contested
         else:
-            headline = "No candidates"
-        tally = "; ".join(
-            f"{entry.get('full_name')} {entry.get('votes', 0)}" for entry in candidates
-        )
-        lines.append((title, f"{headline} — votes: {tally}" if tally else headline))
+            winners = (elected + contested if cutoff > 0 else elected)[:seats]
+            if len(winners) == 1:
+                summary = (
+                    f"{winners[0]['name']} elected with {_vote_label(winners[0]['votes'])}."
+                )
+            else:
+                summary = "Elected: " + ", ".join(
+                    f"{entry['name']} ({_vote_label(entry['votes'])})" for entry in winners
+                ) + "."
+            named = winners
+
+        named_indexes = {entry["index"] for entry in named}
+        others = [entry for entry in entries if entry["index"] not in named_indexes]
+        if others:
+            summary += " Others: " + "; ".join(
+                f"{entry['name']} {entry['votes']}" for entry in others
+            ) + "."
+        lines.append((title, summary))
     return lines
 
 
