@@ -15,6 +15,8 @@ type Election = {
   status: string;
   closes_at: string;
   opens_at: string;
+  can_vote?: boolean;
+  can_accredit?: boolean;
   positions?: Position[];
 };
 
@@ -117,6 +119,8 @@ export default function HomePage() {
   }, []);
 
   const election: Election | undefined = data?.election;
+  // Once the ballot is closed the hero must not invite a vote in it.
+  const ballotOpen = Boolean(election?.can_vote || election?.can_accredit);
 
   return (
     <PublicShell>
@@ -135,9 +139,15 @@ export default function HomePage() {
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <Link href="/accredit" className="btn-primary w-full sm:w-auto">
-              Start voting
-            </Link>
+            {election && !ballotOpen ? (
+              <Link href="/results" className="btn-primary w-full sm:w-auto">
+                Read the declared results
+              </Link>
+            ) : (
+              <Link href="/accredit" className="btn-primary w-full sm:w-auto">
+                Start voting
+              </Link>
+            )}
             <Link href="/verify" className="btn-outline w-full sm:w-auto">
               Check my ballot
             </Link>

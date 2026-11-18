@@ -9,7 +9,7 @@ from ..models import Election
 from ..schemas import STATUS_LABELS
 from ..services import (
     election_summary,
-    find_active_election,
+    find_current_election,
     get_settings_row,
     maybe_auto_close,
     public_election_payload,
@@ -25,7 +25,7 @@ ACTIVE_PUBLIC_STATUSES = ("accreditation_open", "voting_open")
 
 @router.get("/election")
 def current_election(db: Session = Depends(get_db)):
-    election = find_active_election(db)
+    election = find_current_election(db)
     if not election:
         return {"election": None, "published_results": False}
     maybe_auto_close(db, election)

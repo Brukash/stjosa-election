@@ -109,8 +109,26 @@ def find_results_election(db: Session) -> Election | None:
     return find_active_election(db)
 
 
+# The public home page and published-record page follow the election the
+# association is furthest through, so a declared result outranks an older ballot
+# that was left open. Archived elections step aside for the current cycle.
+CURRENT_STATUS_ORDER = ("declared", "under_review", "provisional_results", "counting",
+                        "voting_closed", "voting_open", "accreditation_open", "approved",
+                        "configured", "draft")
+
+
+def find_current_election(db: Session) -> Election | None:
+    for state in CURRENT_STATUS_ORDER:
+        election = db.execute(
+            select(Election).where(Election.status == state).order_by(Election.created_at.desc())
+        ).scalars().first()
+        if election:
+            return election
+    return None
+
+
 def resolve_public_election(db: Session, election_id: str | None) -> Election:
-    election = get_election(db, election_id) if election_id else find_active_election(db)
+    election = get_election(db, election_id) if election_id else find_current_election(db)
     if not election:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No election is available")
     return election
