@@ -280,12 +280,12 @@ schedule are still required before go-live.
 | --- | --- | --- |
 | T-14 days | Configure election, positions, candidates, verification settings | Chairman |
 | T-10 days | Import register, exclude ineligible records, approve register | Chairman |
-| T-7 days | Two-person configuration approval; confirm keys provisioned | Chairman + Returning Officer |
+| T-7 days | Approve the configuration; confirm keys provisioned | Chairman |
 | T-1 day | Check monitoring, email/WhatsApp delivery, backups; enrol MFA for all staff | All |
 | T-0 | Open accreditation, then voting | Chairman |
 | During voting | Monitor turnout, failed Voter ID checks, duplicate attempts; resolve accreditation exceptions | All |
-| Close | Close voting; publish commitments; dual authorise count; run count | Chairman + Returning Officer |
-| T+ | Submit provisional results, approve and declare, download audit reports | Returning Officer + Chairman |
+| Close | Close voting; publish commitments; authorise count; run count | Chairman |
+| T+ | Submit provisional results, approve and declare, download audit reports | Chairman |
 | T+30 days | Archive election, retain records and keys | Chairman |
 
 ## 8. Incident procedures
@@ -302,7 +302,7 @@ audit the action, notify the committee. Never delete audit records.
 inform observers. The unique spent-credential constraint still prevents double counting.
 
 **Counting failure or mismatch:** do not declare. Preserve the failed run, investigate invalid
-ballot commitments, re-run counting after both officials re-authorise. Previous runs remain visible.
+ballot commitments, re-run counting after authorising the count again. Previous runs remain visible.
 
 **Key loss:** the election cannot be decrypted. Restore keys from backup. If unrecoverable, the
 election must be re-run; publish the incident and evidence.

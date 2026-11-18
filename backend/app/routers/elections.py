@@ -1,5 +1,5 @@
 """Election configuration: details, positions, candidates, verification settings,
-two-person configuration approval, lifecycle transitions and exceptional changes."""
+configuration approval by the presiding official, lifecycle transitions and exceptional changes."""
 from __future__ import annotations
 
 import json
@@ -415,15 +415,14 @@ def approve_verification_settings(
     settings_row = get_settings_row(db, election.id)
     if settings_row.locked_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "Verification settings are locked")
-    if settings_row.configured_by and settings_row.configured_by == profile.id:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Verification settings must be approved by a different authorised official",
-        )
+    # One presiding official now both configures and approves: dual control was
+    # retired at the committee's instruction. The audit record says so plainly.
+    self_approved = bool(settings_row.configured_by and settings_row.configured_by == profile.id)
     settings_row.approved_by = profile.id
     settings_row.approved_at = now()
     record_audit(db, action="verification_settings.approve", election_id=election.id,
-                 actor_id=profile.id, entity="verification_settings", ip_address=client_ip(request))
+                 actor_id=profile.id, entity="verification_settings", ip_address=client_ip(request),
+                 detail={"self_approved": self_approved})
     db.add(ElectionEvent(
         election_id=election.id, event_type="verification.approved",
         message=f"Voter verification settings approved by {profile.full_name}",
@@ -434,7 +433,7 @@ def approve_verification_settings(
             "verification": verification_settings_dict(settings_row)}
 
 
-# ── two-person configuration approval ────────────────────────────────────────
+# ── configuration approval ───────────────────────────────────────────────────
 @router.post("/{election_id}/configuration/approve")
 def approve_configuration(
     election_id: str,
@@ -455,6 +454,8 @@ def approve_configuration(
 
     if election.status not in {"draft", "configured", "approved"}:
         raise HTTPException(status.HTTP_409_CONFLICT, "Configuration approval is closed")
+    if election.status == "approved" and election.tally_public_key:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Configuration is already approved")
 
     existing = db.execute(
         select(ElectionConfigurationApproval).where(
@@ -479,62 +480,52 @@ def approve_configuration(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Approve the voter verification settings first")
 
     current_hash = configuration_hash(db, election)
+    # The committee conducts the election through its Chairman, so one approval
+    # from the presiding official completes the configuration. The approval,
+    # the keys and the status change are recorded together.
     db.add(ElectionConfigurationApproval(
         election_id=election.id, settings_hash=current_hash, approver_id=profile.id,
         approver_role=role_key, approval_status="approved",
-        note="Configuration independently confirmed",
+        note="Configuration approved by the presiding official",
     ))
-    db.flush()
 
-    approvals = db.execute(
-        select(ElectionConfigurationApproval).where(
-            ElectionConfigurationApproval.election_id == election.id,
-            ElectionConfigurationApproval.approval_status == "approved",
-        )
-    ).scalars().all()
-    role_set = {a.approver_role for a in approvals}
-    approved_now = False
-
-    if {"chairman", "returning_officer"}.issubset(role_set):
-        for position in positions:
-            position.approved = True
-        for candidate in candidates:
-            candidate.approved = True
-        # Keys are created once, on the approval that completes dual control. A
-        # second completing approval must never replace them: every ballot cast
-        # so far is encrypted to the existing tally key and would be lost.
-        if not election.tally_public_key:
-            keys = crypto.create_election_keys(election.id)
-            election.tally_public_key = keys["tally_public_key"]
-            election.signing_public_key = keys["signing_public_key"]
-            # The encrypted bundle rides on the election row, so this deployment's
-            # disk being discarded between instances cannot lose it.
-            election.key_material = keys["key_material"]
-            election.credential_public_key = json.dumps(crypto.credential_public_numbers())
-        election.status = "approved"
-        election.approved_by = profile.id
-        election.approved_at = now()
-        election.configuration_hash = current_hash
-        settings_row.approved_at = settings_row.approved_at or now()
-        approved_now = True
-        db.add(ElectionEvent(
-            election_id=election.id, event_type="configuration.approved",
-            message="Two-person configuration approval completed; election keys provisioned",
-            actor_id=profile.id,
-        ))
+    for position in positions:
+        position.approved = True
+    for candidate in candidates:
+        candidate.approved = True
+    # Keys are created once per election. A later approval must never replace
+    # them: every ballot already cast is encrypted to the existing tally key.
+    if not election.tally_public_key:
+        keys = crypto.create_election_keys(election.id)
+        election.tally_public_key = keys["tally_public_key"]
+        election.signing_public_key = keys["signing_public_key"]
+        # The encrypted bundle rides on the election row, so this deployment's
+        # disk being discarded between instances cannot lose it.
+        election.key_material = keys["key_material"]
+        election.credential_public_key = json.dumps(crypto.credential_public_numbers())
+    election.status = "approved"
+    election.approved_by = profile.id
+    election.approved_at = now()
+    election.configuration_hash = current_hash
+    settings_row.approved_at = settings_row.approved_at or now()
+    settings_row.approved_by = settings_row.approved_by or profile.id
+    db.add(ElectionEvent(
+        election_id=election.id, event_type="configuration.approved",
+        message=f"Configuration approved by the {role_key.replace('_', ' ')}; election keys provisioned",
+        actor_id=profile.id,
+    ))
 
     record_audit(db, action="configuration.approve", election_id=election.id, actor_id=profile.id,
                  actor_role=role_key, entity="election", entity_id=election.id,
                  ip_address=client_ip(request), detail={"configuration_hash": current_hash})
     db.commit()
     return {
-        "approved_now": approved_now,
-        "approvals": len(approvals),
-        "required_roles": sorted(role_set),
+        "approved_now": True,
+        "approvals": 1,
+        "required_roles": [role_key],
         "configuration_hash": current_hash,
         "status": election.status,
-        "message": "Configuration approved and keys provisioned." if approved_now
-        else "Approval recorded. A second authorised official must confirm the configuration.",
+        "message": "Configuration approved and keys provisioned.",
     }
 
 
@@ -699,7 +690,7 @@ def request_exceptional_change(
     db.commit()
     return {
         "id": change.id, "status": change.status, "approvals": change.approvals,
-        "message": "Change recorded. A second authorised official must approve it before it takes effect.",
+        "message": "Change recorded. Confirm it to apply it to the configuration.",
     }
 
 
@@ -715,8 +706,6 @@ def approve_exceptional_change(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Change request not found")
     if change.status != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, "Change request is not pending")
-    if any(a["profile_id"] == profile.id for a in change.approvals):
-        raise HTTPException(status.HTTP_409_CONFLICT, "You have already approved this change")
     roles = roles_for(db, profile.id)
     if SECOND_APPROVAL_ROLE in roles:
         role_key = SECOND_APPROVAL_ROLE
@@ -728,11 +717,21 @@ def approve_exceptional_change(
             "Only the Chairman or Returning Officer may approve an exceptional change",
         )
     election = get_election(db, change.election_id)
-    approvals = list(change.approvals) + [
-        {"profile_id": profile.id, "role": role_key, "at": now().isoformat()}
-    ]
+    approvals = [dict(a) for a in change.approvals]
+    own_entry = next((a for a in approvals if a["profile_id"] == profile.id), None)
+    if own_entry is not None and role_key != CHAIRMAN_APPROVAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, "You have already approved this change")
+    if own_entry is not None:
+        # The Chairman requested it and is now confirming it: that confirmation
+        # is what applies the change, so a single official can still repair a
+        # locked configuration.
+        own_entry["confirmed_at"] = now().isoformat()
+    else:
+        approvals.append({"profile_id": profile.id, "role": role_key, "at": now().isoformat()})
     change.approvals = approvals
-    if len(approvals) >= 2:
+    # One presiding official completes the change; two approvals still apply when
+    # both offices are in use.
+    if role_key == CHAIRMAN_APPROVAL or len(approvals) >= 2:
         for key, value in change.changed_fields.items():
             if key in CHANGEABLE_FIELDS:
                 setattr(election, key, _change_value(key, value))

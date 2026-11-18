@@ -11,7 +11,7 @@ Two audiences, deliberately separated:
 
 1. **Voters** — alumni, often on a phone, not technical, sometimes low digital confidence.
    They need: what this is, when it closes, what they need (Voter ID), how to vote, proof their vote counted.
-2. **Committee officials** — Chairman, Returning Officer, Accreditation Officer, Observer, Super Admin.
+2. **Committee officials** — Chairman (conducts the election end to end), Returning Officer (optional, may act in the Chairman's place), Accreditation Officer, Observer, Super Admin.
    They need the existing admin back office, unchanged in behaviour.
 
 ## Visual thesis
@@ -188,3 +188,12 @@ No gradients, no glass, no purple, no glow.
   the fatal panel. Proved locally: keys created, the key directory deleted to mimic a discarded
   instance, then signing, 3072-bit tally load, ballot encrypt/decrypt and file rematerialisation all
   succeeded from the row alone.
+- 2026-11-18 — **Change control:** the committee no longer requires a Returning Officer and asked the
+  Chairman to conduct the election from start to finish. The two-person rule is retired: one recorded
+  approval completes configuration (and provisions keys), one authorisation is enough to count, the
+  Chairman has `counting.run`, a presiding official may approve verification settings they saved
+  (audited as `self_approved`), and a Chairman's confirmation applies an exceptional change. The
+  Returning Officer office still exists so existing accounts keep working, but no step requires it.
+  Trade-off accepted knowingly: a single compromised Chairman account can now complete every stage;
+  the audit trail, signed evidence and published commitments are what remain as independent checks.
+  This supersedes the separation-of-duties claims in earlier entries.

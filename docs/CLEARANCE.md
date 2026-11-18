@@ -70,7 +70,7 @@ Do not run a load test against the production database during a live election.
 1. **Setup (T-7 days):** staging deployment with production-like email/WhatsApp providers and test senders;
    `DEMO_SEED=false`; create pilot election; import a pilot register of 20–50 consenting alumni;
    configure positions/candidates; provision keys; approve configuration and verification settings
-   through the two-person flow; enrol MFA for every official.
+   through configuration approval; enrol MFA for every official.
 2. **Briefing (T-2 days):** walk officials through accreditation, counting authorisation, result
    review/declaration, emergency changes and audit exports. Issue Voter IDs privately.
 3. **Pilot voting (60–90 minutes):** open accreditation, then voting; ask at least one voter to use

@@ -75,8 +75,9 @@ coercion and vote-buying risk.
 - Commitments are published in batches after closure. Each batch has a Merkle root
   (`SHA-256("SJC-LEAF|commitment")`, `SHA-256("SJC-NODE|left|right")`) and an Ed25519 signature over a
   canonical JSON header.
-- Counting runs only with two authorisations (Chairman + Returning Officer), decrypts each accepted
-  ballot, validates every selection against the approved candidate set, and writes:
+- Counting runs only after an authorisation is recorded (one presiding official; the committee
+  retired the two-person rule on 2026-11-18), decrypts each accepted ballot, validates every
+  selection against the approved candidate set, and writes:
   - one `tally_proofs` row per ballot (Merkle inclusion proof, decrypted-selection hash, hash-chain
     link),
   - a signed `tally_runs` evidence object (`evidence_hash`, `signature`, `reconciliation`).
@@ -88,9 +89,9 @@ coercion and vote-buying risk.
 
 | Control | Implementation |
 | --- | --- |
-| No admin can see selections | Ballot tables have no voter FK; decryption requires the tally key (counting service, dual control) |
+| No admin can see selections | Ballot tables have no voter FK; decryption requires the tally key, held encrypted with the election and used only by the counting service |
 | Results need two stages of official sign-off | Returning Officer submits, Chairman approves; `result_approvals` records both. The Chairman may complete both stages (single-official path), which is recorded in the approval comments, audit log and election events |
-| No single official can approve configuration | Chairman + Returning Officer approvals required before keys are provisioned |
+| Configuration approval is an explicit, recorded act | The presiding official's approval, the key bundle, the configuration hash and the status change are written in one transaction and audited. Single-official conduct is the committee's rule (2026-11-18); it is a deliberate trade-off against the earlier two-person requirement |
 | Super Admin restrictions | Permission matrix excludes approval, verification configuration, counting and declaration |
 | Verification freeze | `elections.locked_at` + `election_verification_settings.locked_at` set atomically on first accepted ballot; settings endpoints reject updates |
 | Audit integrity | Append-only audit log; PostgreSQL trigger blocks UPDATE/DELETE |
@@ -137,13 +138,13 @@ properties. Last run against the delivered code: **all checks passed**.
 15. MFA enrol/activate and login enforcement (tested)
 14. Observer cannot change lifecycle (403)
 15. Commitment list published and signature verified
-16. Counting blocked without dual authorisation (403)
+16. Counting blocked without an authorisation (403)
 17. Count completes with signed evidence and balanced reconciliation
 18. Voter verification shows Merkle inclusion and count inclusion
 19. Results submitted, approved, declared and signature verified
 20. Result certificate PDF generated
 21. Audit report passes all 8 automated checks; PDF and Excel exports valid
-22. Second election configured and approved through the two-person flow
+22. Second election configured and approved by the Chairman alone
 
 Additionally exercised in a real browser (Chromium): Voter ID accreditation, in-browser credential
 blinding/unblinding and verification, ballot selection, challenge verification (all four browser

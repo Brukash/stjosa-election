@@ -38,15 +38,15 @@ All sign-in attempts are recorded in the audit log.
 
 The register and eligibility rules lock permanently when the first ballot is accepted.
 
-## 4. Two-person configuration approval
+## 4. Configuration approval
 
-1. The Chairman records approval under **Configuration approvals**.
-2. The Returning Officer independently records the second approval.
-3. The system then provisions the election's RSA tally key and Ed25519 signing key, computes the
+1. The Chairman clicks **Approve configuration** under **Configuration approval**.
+2. The system provisions the election's RSA tally key and Ed25519 signing key, computes the
    configuration hash and moves the election to **Approved**.
 
-A single official cannot complete approval. The configuration hash covers dates, rules, positions,
-candidates and verification settings.
+One approval completes the step: the committee retired the two-person requirement on 2026-11-18 so
+that the Chairman conducts the election from start to finish. The configuration hash covers dates,
+rules, positions, candidates and verification settings.
 
 ## 5. Open the election
 
@@ -55,10 +55,9 @@ candidates and verification settings.
 3. **Close voting** can be performed by the Chairman or Returning Officer; voting also closes
    automatically at the configured closing time.
 
-Verification settings must be approved by a **different** authorised official from the one who saved
-them (for example the Chairman configures, the Returning Officer approves). They freeze automatically
-on the first accepted ballot. The dashboard shows the
-lock time.
+Verification settings are saved and approved by the Chairman (one official may do both; the approval
+is recorded and audited). They freeze automatically on the first accepted ballot. The dashboard shows
+the lock time.
 
 ## 6. Monitor the election
 
@@ -77,11 +76,11 @@ If a voter loses their credential, an Accreditation Officer can revoke the activ
 (`POST /api/accreditation/exceptions/reset-issuance` with the Voter ID and a reason). The revocation
 is audited and the voter can accredit again. Use only for genuine exceptions and record the reason.
 
-## 8. Counting (dual control)
+## 8. Counting
 
 1. Confirm voting is closed.
-2. **Counting → Authorise counting** as Chairman; the Returning Officer authorises separately.
-3. **Run automated count** (Returning Officer). The system:
+2. **Counting → Authorise counting** as Chairman. One authorisation is enough.
+3. **Run automated count** as Chairman. The system:
    - publishes any unpublished commitment batch,
    - decrypts accepted ballots with the tally key,
    - excludes challenged ballots,
@@ -94,7 +93,7 @@ the preserved records; previous runs remain in the run history.
 
 ## 9. Declare results
 
-1. **Results → Submit provisional results** (Returning Officer).
+1. **Results → Submit provisional results** (Chairman).
 2. The Chairman reviews and clicks **Approve and declare results**.
 3. The declaration is signed, published and accompanied by a PDF certificate and verification
    evidence.
@@ -113,7 +112,7 @@ never links a voter to a ballot.
 If an emergency requires a change after the freeze:
 
 1. Record the change request with a mandatory reason.
-2. A second authorised official approves it.
+2. Confirm it (the Chairman can record and confirm it; a second official's approval also applies it).
 3. The previous configuration hash and approval history are preserved and the change appears in the
    election event log.
 

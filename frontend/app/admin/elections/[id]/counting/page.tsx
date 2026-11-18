@@ -98,9 +98,8 @@ export default function CountingPage() {
       {keysAvailable ? null : !keysProvisioned ? (
         <Card className="card-pad">
           <SectionHeading eyebrow="Keys pending" title="Keys are created when configuration is approved">
-            The tally key and the record-signing key are generated once the Chairman and the
-            Returning Officer approve the configuration together. Until that approval completes
-            there are no keys to count with.
+            The tally key and the record-signing key are generated when the Chairman approves the
+            configuration. Until that approval completes there are no keys to count with.
           </SectionHeading>
           <p className="mt-3 text-sm leading-relaxed text-ink/60">
             The keys are saved with the election the moment they are created, so counting works on
@@ -138,14 +137,18 @@ export default function CountingPage() {
 
       {keysAvailable ? (
       <Card className="card-pad">
-        <SectionHeading eyebrow="Dual control" title="Authorise counting">
-          Counting requires the Chairman and the Returning Officer to authorise independently. Tally
-          keys remain encrypted and are only used by the counting service.
+        <SectionHeading eyebrow="Authorisation" title="Authorise counting">
+          The Chairman authorises counting, and one authorisation is enough. A Returning Officer, if
+          the committee has assigned one, may authorise in the Chairman&apos;s place. Tally keys remain
+          encrypted and are only used by the counting service.
         </SectionHeading>
         <div className="grid gap-2 sm:grid-cols-2">
           {["chairman", "returning_officer"].map((role) => (
             <div key={role} className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
-              <span className="text-sm capitalize text-ink/70">{role.replace(/_/g, " ")}</span>
+              <span className="text-sm capitalize text-ink/70">
+                {role.replace(/_/g, " ")}
+                {role === "returning_officer" ? <span className="text-ink/35"> (optional)</span> : null}
+              </span>
               <span className={roles.has(role) ? "pill-green" : "pill-grey"}>
                 {roles.has(role) ? "Authorised" : "Pending"}
               </span>
@@ -170,7 +173,7 @@ export default function CountingPage() {
               onClick={runCount}
               disabled={
                 busy ||
-                !data.dual_control_ready ||
+                !data.authorised ||
                 !["voting_closed", "provisional_results", "under_review"].includes(data.status)
               }
             >
@@ -178,7 +181,7 @@ export default function CountingPage() {
             </button>
           ) : (
             <p className="self-center text-xs text-ink/45">
-              The Returning Officer runs the automated count after both officials authorise it.
+              Only an official with counting permission can run the automated count.
             </p>
           )}
         </div>
@@ -300,7 +303,7 @@ export default function CountingPage() {
       ) : !statusBlocksResults && keysAvailable ? (
         <Card className="card-pad">
           <p className="text-sm text-ink/60">
-            No completed count yet. Authorise with both officials, then run the automated count.
+            No completed count yet. Authorise counting, then run the automated count.
           </p>
         </Card>
       ) : null}

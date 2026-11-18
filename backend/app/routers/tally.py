@@ -53,9 +53,14 @@ def _authorisations(db: Session, election_id: str) -> list[dict]:
     ]
 
 
-def _dual_control_ready(db: Session, election_id: str) -> tuple[bool, set[str]]:
+def _counting_authorised(db: Session, election_id: str) -> tuple[bool, set[str]]:
+    """Counting is authorised by one presiding official (the committee's rule).
+
+    The Chairman conducts the election end to end, so a second authorisation is
+    no longer required. Any authorisation on record still names its official.
+    """
     roles = {a["role"] for a in _authorisations(db, election_id)}
-    return ({CHAIRMAN, RETURNING}.issubset(roles), roles)
+    return (bool(roles), roles)
 
 
 def _latest_completed_run(db: Session, election_id: str, run_id: str | None = None) -> TallyRun | None:
@@ -143,13 +148,12 @@ def authorise_counting(
         message=f"Counting authorised by {role_key.replace('_', ' ')}", actor_id=profile.id,
     ))
     db.commit()
-    ready, role_set = _dual_control_ready(db, election.id)
+    authorised, role_set = _counting_authorised(db, election.id)
     return {
         "authorisations": _authorisations(db, election.id),
         "roles": sorted(role_set),
-        "ready": ready,
-        "message": "Dual control satisfied. Counting may proceed." if ready
-        else "Authorisation recorded. Both the Chairman and Returning Officer must authorise counting.",
+        "authorised": authorised,
+        "message": "Counting authorised. The automated count may now run.",
     }
 
 
@@ -163,11 +167,11 @@ def run_tally(
     election = get_election(db, election_id)
     if election.status not in {"voting_closed", "provisional_results", "under_review"}:
         raise HTTPException(status.HTTP_409_CONFLICT, "Voting must be closed before counting can begin")
-    ready, role_set = _dual_control_ready(db, election.id)
-    if not ready:
+    authorised, _role_set = _counting_authorised(db, election.id)
+    if not authorised:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Dual control required: both the Chairman and Returning Officer must authorise the count",
+            "Counting must be authorised before the automated count can run",
         )
 
     publish_pending_commitments(db, election)
@@ -368,7 +372,7 @@ def get_tally(
             "keys_available": keys_available,
             "keys_provisioned": keys_provisioned,
             "authorisations": _authorisations(db, election.id),
-            "dual_control_ready": _dual_control_ready(db, election.id)[0],
+            "authorised": _counting_authorised(db, election.id)[0],
         }
     return {
         "election_id": election.id,
@@ -377,7 +381,7 @@ def get_tally(
         "keys_available": keys_available,
         "keys_provisioned": keys_provisioned,
         "authorisations": _authorisations(db, election.id),
-        "dual_control_ready": _dual_control_ready(db, election.id)[0],
+        "authorised": _counting_authorised(db, election.id)[0],
         "stats": election_stats(db, election.id),
     }
 

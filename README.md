@@ -31,15 +31,16 @@ Association, built to the SRS v1.1 baseline.
   validity and inclusion in the count; never reveals identity or selections.
 - **Monitoring dashboard** — Turnout, accreditation, failed identity checks, rejected duplicates, hourly
   activity, security alerts, availability, counting and results status.
-- **Counting** — Requires dual authorisation (Chairman + Returning Officer); decrypts under the
-  tally key, validates ballots, aggregates per position, writes per-ballot proofs, a hash-chained
-  evidence record and an Ed25519 signature. Results stay hidden during voting.
+- **Counting** — Authorised by the Chairman (one authorisation; the committee retired the
+  two-person rule on 2026-11-18); decrypts under the tally key, validates ballots, aggregates per
+  position, writes per-ballot proofs, a hash-chained evidence record and an Ed25519 signature.
+  Results stay hidden during voting.
 - **Results** — Provisional → submitted → approved/declared, signed figures, versioned corrections
   that preserve earlier declarations, result certificate PDF.
 - **Audit** — Append-only audit log, eight automated compliance checks, PDF and Excel reports.
-- **Configuration integrity** — Four verification controls enabled by default; two-person
-  configuration approval; automatic lock on the first accepted ballot; exceptional change workflow
-  with reason, second approval and preserved history.
+- **Configuration integrity** — Four verification controls enabled by default; recorded
+  configuration approval by the Chairman, which provisions the election's keys; automatic lock on the
+  first accepted ballot; exceptional change workflow with reason and preserved history.
 
 ## Repository layout
 
@@ -161,7 +162,7 @@ cd backend
 The script exercises the full mock-election suite: accreditation, blinded credential verification,
 challenge verification, idempotent casting, credential reuse rejection, receipts/PDF, commitment
 publication, dual-control counting, voter inclusion verification, declaration, audit reports and a
-second election through the two-person configuration flow. Run it against a fresh database.
+second election through configuration approval by the Chairman alone. Run it against a fresh database.
 
 ## Supabase deployment
 

@@ -146,13 +146,14 @@ ROLE_DESCRIPTIONS = {
         "and technical audit records. Cannot configure an election, approve results or see ballots."
     ),
     CHAIRMAN: (
-        "Electoral Committee Chairman. Creates and configures elections, approves the register, "
-        "configures verification, authorises counting and approves the declared result. Cannot "
-        "approve verification settings they configured themselves."
+        "Electoral Committee Chairman. Conducts the election end to end: creates and configures it, "
+        "approves the register and verification settings, authorises and runs the count, and submits, "
+        "approves and publishes the result."
     ),
     RETURNING: (
-        "Returning Officer. Independent second official: approves verification settings, runs "
-        "counting, submits and publishes results. Cannot configure the election or manage accounts."
+        "Returning Officer. Optional second official. May approve configuration, authorise and run "
+        "counting, and submit or publish results in the Chairman's place. No step requires the "
+        "office; the committee retired the two-person rule on 2026-11-18."
     ),
     ACCREDITATION: (
         "Accreditation Officer. Imports the voter register, supports Voter ID accreditation and "
@@ -173,7 +174,8 @@ PERMISSIONS: dict[str, set[str]] = {
         "election.create", "election.edit", "election.approve", "election.view",
         "register.view", "register.import", "register.approve", "verification.configure",
         "verification.approve", "monitor.view", "ballot.view_public",
-        "counting.authorise", "tally.view", "results.review", "results.submit", "results.approve",
+        "counting.authorise", "counting.run", "tally.view", "results.review", "results.submit",
+        "results.approve",
         "results.publish",
         "audit.view", "accreditation.oversight", "commitments.view", "lifecycle.manage",
     },

@@ -177,7 +177,7 @@ export default function ElectionSetupPage() {
         auth: true,
         body: JSON.stringify({ changes, reason: changeReason }),
       });
-      setNotice("Exceptional change recorded. A second authorised official must approve it.");
+      setNotice("Exceptional change recorded. Confirm it to apply it to the configuration.");
       setChangeReason("");
       load();
     } catch (err: any) {
@@ -219,7 +219,7 @@ export default function ElectionSetupPage() {
   const canRecordConfigurationApproval =
     Boolean(myApprovalRole) &&
     !approvalRoles.has(myApprovalRole as string) &&
-    ["draft", "configured", "approved"].includes(election.status);
+    ["draft", "configured"].includes(election.status);
   const canRequestChange = can(profile, "verification.approve");
   const lifecycleActions = (LIFECYCLE_ACTIONS[election.status] ?? []).filter((action) =>
     action.status === "voting_closed"
@@ -349,11 +349,14 @@ export default function ElectionSetupPage() {
 
         <div className="space-y-5">
           <Card className="card-pad">
-            <SectionHeading eyebrow="Two-person approval" title="Configuration approvals" />
+            <SectionHeading eyebrow="Approval" title="Configuration approval" />
             <div className="space-y-2">
               {["chairman", "returning_officer"].map((role) => (
                 <div key={role} className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
-                  <span className="text-sm capitalize text-ink/70">{role.replace("_", " ")}</span>
+                  <span className="text-sm capitalize text-ink/70">
+                    {role.replace("_", " ")}
+                    {role === "returning_officer" ? <span className="text-ink/35"> (optional)</span> : null}
+                  </span>
                   <span className={approvalRoles.has(role) ? "pill-green" : "pill-grey"}>
                     {approvalRoles.has(role) ? "Approved" : "Pending"}
                   </span>
@@ -361,17 +364,17 @@ export default function ElectionSetupPage() {
               ))}
             </div>
             <p className="mt-3 text-xs text-ink/45">
-              The Chairman approves the settings and a second authorised official independently confirms
-              them. Approval provisions the election's tally and signing keys.
+              The Chairman approves the configuration, and one approval completes it. Approval
+              provisions the election&apos;s tally and signing keys.
             </p>
             {canRecordConfigurationApproval ? (
               <button className="btn-dark mt-4 w-full" onClick={approveConfiguration} disabled={busy}>
-                Record my approval
+                Approve configuration
               </button>
             ) : (
               <p className="mt-3 text-xs text-ink/45">
-                Configuration approval is reserved for the Chairman and Returning Officer. Each may
-                record one approval.
+                Only the Chairman, or a Returning Officer acting in the Chairman&apos;s place, approves
+                the configuration.
               </p>
             )}
             {election.approved_at ? (
@@ -467,8 +470,9 @@ export default function ElectionSetupPage() {
       {locked && canRequestChange ? (
         <Card className="card-pad">
           <SectionHeading eyebrow="Exceptional changes" title="Emergency configuration amendment">
-            Voting integrity settings cannot be changed. Emergency changes are documented, require two
-            approvals, preserve the previous configuration and are published to voters.
+            Voting integrity settings cannot be changed. Emergency changes are documented, require
+            confirmation before they apply, preserve the previous configuration and are published to
+            voters.
           </SectionHeading>
           <form onSubmit={requestChange} className="grid gap-4 sm:grid-cols-2">
             <div>

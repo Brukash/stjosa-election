@@ -209,14 +209,13 @@ def main() -> None:
     assert len(manifest["commitments"]) >= len(cast_receipts)
     ok("signed anonymous commitment list published with Merkle proofs")
 
-    # ── 5. dual-control counting ────────────────────────────────────────────
-    call("POST", f"/tally/{election['id']}/authorise", headers=headers["chairman"])
-    premature = httpx.post(f"{BASE}/tally/{election['id']}/run", headers=headers["returning"], timeout=60)
-    assert premature.status_code == 403, "counting ran without dual authorisation"
-    ok("counting blocked until both Chairman and Returning Officer authorise")
+    # ── 5. counting authorisation ───────────────────────────────────────────
+    premature = httpx.post(f"{BASE}/tally/{election['id']}/run", headers=headers["chairman"], timeout=60)
+    assert premature.status_code == 403, "counting ran without authorisation"
+    ok("counting blocked until it is authorised")
 
-    call("POST", f"/tally/{election['id']}/authorise", headers=headers["returning"])
-    tally = call("POST", f"/tally/{election['id']}/run", headers=headers["returning"])
+    call("POST", f"/tally/{election['id']}/authorise", headers=headers["chairman"])
+    tally = call("POST", f"/tally/{election['id']}/run", headers=headers["chairman"])
     assert tally["totals"]["accepted_ballots"] == len(cast_receipts)
     assert tally["totals"]["accepted_ballots"] == tally["totals"]["valid_ballots"] + tally["totals"]["invalid_ballots"]
     assert tally["signature"] and tally["evidence_hash"]
@@ -268,17 +267,11 @@ def main() -> None:
         "ballot_inclusion_enabled": True, "private_selection_enabled": True,
         "public_commitment_list_enabled": True, "pdf_receipt_enabled": True,
     })
-    same_official = httpx.post(
-        f"{BASE}/elections/{new_election['id']}/verification-settings/approve",
-        headers=headers["chairman"], timeout=60,
-    )
-    assert same_official.status_code == 403, same_official.text
-    call("POST", f"/elections/{new_election['id']}/verification-settings/approve", headers=headers["returning"])
-    ok("verification settings require approval by a different official")
-    call("POST", f"/elections/{new_election['id']}/configuration/approve", headers=headers["chairman"])
-    approved = call("POST", f"/elections/{new_election['id']}/configuration/approve", headers=headers["returning"])
+    call("POST", f"/elections/{new_election['id']}/verification-settings/approve", headers=headers["chairman"])
+    ok("verification settings approved by the presiding official")
+    approved = call("POST", f"/elections/{new_election['id']}/configuration/approve", headers=headers["chairman"])
     assert approved["approved_now"] and approved["status"] == "approved"
-    ok("second election configured and approved through the two-person flow")
+    ok("second election configured and approved by the Chairman alone")
 
     # ── 9. roles and account administration ──────────────────────────────────
     superadmin = login("superadmin@sjcjos-alumni.org")

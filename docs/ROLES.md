@@ -29,20 +29,21 @@ Cannot:
 Can:
 - Create and edit elections, positions and candidates.
 - Import and approve the voter register.
-- Configure verification settings (but **not approve their own** settings).
-- Authorise counting, review results, approve the declaration, publish results.
+- Configure and approve verification settings.
+- Authorise counting and run the automated count.
+- Review results, approve the declaration, publish results.
 - Oversee accreditation, lifecycle and audit.
 
 Cannot:
-- Run counting alone (requires the Returning Officer), approve its own verification settings, or
-  manage staff accounts.
+- Manage staff accounts.
 
 ### Returning Officer — `returning_officer`
-**Duty:** independent second official for verification and counting.
+**Duty:** optional second official. On 2026-11-18 the committee retired the two-person rule and
+asked the Chairman to conduct the election from start to finish, so no step requires this office.
 
 Can:
-- Approve verification settings configured by another official.
-- Authorise and run counting (dual control with the Chairman).
+- Approve verification settings.
+- Authorise and run counting, in the Chairman's place.
 - Submit provisional results and publish the declared result.
 - Manage election lifecycle within its permitted transitions; view audit and commitments.
 
@@ -83,10 +84,10 @@ Cannot:
 | Import register | — | ✅ | — | ✅ | — |
 | Approve register | — | ✅ | — | — | — |
 | Configure verification | — | ✅ | — | — | — |
-| Approve verification (different official) | — | ✅ | ✅ | — | — |
+| Approve verification | — | ✅ | ✅ | — | — |
 | Authorise counting | — | ✅ | ✅ | — | — |
-| Run counting | — | — | ✅ | — | — |
-| Submit/publish results | — | submit | ✅ | — | — |
+| Run counting | — | ✅ | ✅ | — | — |
+| Submit/publish results | — | ✅ | ✅ | — | — |
 | Approve/declare results | — | ✅ | — | — | — |
 
 When no Returning Officer submission has been made, the Chairman can complete both the submission
@@ -98,10 +99,12 @@ did both.
 | Accreditation console / exceptions | — | view | — | ✅ | — |
 | Manage fields/accounts | accounts | all election | lifecycle | register | none |
 
-Two additional separations are enforced regardless of role:
+Two integrity rules apply regardless of role:
 
-1. **Verification settings** must be approved by an official other than the one who saved them.
-2. **Counting** requires both the Chairman and Returning Officer (`tally_authorisations`).
+1. **Verification settings** are approved as a recorded act (`approved_by`, `approved_at`), and the
+   approval is audited, including when one official both saves and approves them.
+2. **Counting** runs only after an authorisation is recorded in `tally_authorisations`. One
+   authorisation is enough; the Chairman's is the normal case.
 
 Read boundaries are enforced with dedicated permissions, not just hidden menus:
 

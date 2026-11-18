@@ -343,7 +343,7 @@ def build():
     left_items = [
         ("Blind credentials", "RSA-FDH signatures; the service signs a blinded secret it never sees."),
         ("Ballot secrecy", "Encrypted ballots have no join path to a voter or credential serial."),
-        ("Dual control", "Counting requires the Chairman and Returning Officer; results need approval."),
+        ("Recorded control", "The Chairman authorises counting; every approval and count is signed and audited."),
     ]
     right_items = [
         ("Locked configuration", "Verification controls freeze on the first accepted ballot."),

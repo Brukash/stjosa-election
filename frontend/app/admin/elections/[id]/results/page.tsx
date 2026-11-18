@@ -108,10 +108,9 @@ export default function ResultsAdminPage() {
 
       <Card className="card-pad">
         <SectionHeading eyebrow="Declaration workflow" title="Provisional → approval → declaration">
-          The Returning Officer submits provisional results for the Electoral Committee Chairman to
-          approve and declare. The Chairman may carry out both steps; when one account does, the
-          approval trail records it as a single-official declaration. Every version is preserved with
-          signatures.
+          The Chairman submits the provisional results, approves them and declares the result. Every
+          version is preserved with signatures, and the approval trail records which official carried
+          out each step.
         </SectionHeading>
         <div className="grid gap-2 sm:grid-cols-3">
           {[
