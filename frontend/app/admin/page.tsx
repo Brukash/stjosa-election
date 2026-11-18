@@ -102,12 +102,14 @@ export default function AdminDashboardPage() {
 
       {overview && stats ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <Stat label="Eligible voters" value={stats.eligible_voters} />
             <Stat label="Accredited" value={stats.accredited_voters} hint={`${stats.accreditation_rate}% of register`} />
             <Stat label="Votes cast" value={stats.votes_cast} hint={`${stats.turnout_percentage}% turnout`} />
             <Stat label="Yet to vote" value={stats.yet_to_vote} />
-            <Stat label="Challenged ballots" value={stats.challenged_ballots} hint="excluded from count" />
+            <div className="col-span-2 lg:col-span-1">
+              <Stat label="Challenged ballots" value={stats.challenged_ballots} hint="excluded from count" />
+            </div>
           </div>
 
           <Card className="card-pad">
@@ -170,10 +172,12 @@ export default function AdminDashboardPage() {
               Successful sends and failures are recorded without message contents or full voter contact
               details.
             </SectionHeading>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               <Stat label="Notice attempts" value={overview.live.registration_delivery.attempts ?? 0} />
               <Stat label="Delivered" value={overview.live.registration_delivery.sent ?? 0} />
-              <Stat label="Failed deliveries" value={overview.live.registration_delivery.failed ?? 0} />
+              <div className="col-span-2 sm:col-span-1">
+                <Stat label="Failed deliveries" value={overview.live.registration_delivery.failed ?? 0} />
+              </div>
             </div>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <div className="table-wrap">
@@ -241,10 +245,12 @@ export default function AdminDashboardPage() {
                 <span>24h ago</span>
                 <span>now</span>
               </div>
-              <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <Stat label="Accreditations (1h)" value={overview.live.accreditations_last_hour} />
                 <Stat label="Failed Voter ID checks" value={overview.live.failed_identity_checks} />
-                <Stat label="Rejected duplicates" value={overview.live.rejected_duplicate_attempts} />
+                <div className="col-span-2 sm:col-span-1">
+                  <Stat label="Rejected duplicates" value={overview.live.rejected_duplicate_attempts} />
+                </div>
               </div>
             </Card>
 
@@ -290,7 +296,7 @@ export default function AdminDashboardPage() {
                 <p className="text-sm text-ink/55">{overview.counting.message}</p>
               ) : (
                 <>
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid grid-cols-2 gap-3">
                     <Stat label="Accepted ballots" value={overview.counting.accepted_ballots} />
                     <Stat label="Valid ballots" value={overview.counting.valid_ballots} />
                     <Stat label="Invalid ballots" value={overview.counting.invalid_ballots} />

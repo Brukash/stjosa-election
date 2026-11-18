@@ -28,7 +28,7 @@ export default function DeliverySettingsPage() {
 
       {data ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat label="Environment" value={data.environment} />
             <Stat label="Delivery mode" value={data.delivery_mode} />
             <Stat label="Email provider" value={data.providers.find((item: any) => item.channel === "email")?.provider ?? "none"} />

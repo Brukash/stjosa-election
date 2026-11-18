@@ -82,12 +82,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="min-h-screen bg-paper">
       <header className="sticky top-0 z-30 border-b border-rule bg-white/95 shadow-sm backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
-          <div className="flex items-center gap-3">
-            <Crest size={34} />
-            <div className="leading-tight">
-              <p className="font-display text-sm text-ink">Election Control Room</p>
-              <p className="mt-0.5 text-[11px] font-medium text-ink/60">
+        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2.5 sm:px-6 sm:py-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5 sm:gap-3">
+            <Crest size={32} />
+            <div className="min-w-0 leading-tight">
+              <p className="truncate font-display text-[13px] text-ink sm:text-sm">
+                Election Control Room
+              </p>
+              <p className="mt-0.5 truncate text-[10.5px] font-medium text-ink/60 sm:text-[11px]">
                 Signed in as <span className="font-semibold text-ink">{profile.full_name}</span>
               </p>
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -98,7 +100,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   roleNames.map((role: string) => (
                     <span
                       key={role}
-                      className="rounded-full border border-green/20 bg-green/[0.08] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-green"
+                      className="whitespace-nowrap rounded-full border border-green/20 bg-green/[0.08] px-2 py-0.5 text-[8.5px] font-semibold uppercase tracking-wide text-green sm:text-[9px]"
                     >
                       {role}
                     </span>
@@ -109,12 +111,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Link href="/" className="btn-ghost text-xs">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <Link href="/" className="btn-ghost !px-2 text-[11px] sm:!px-4 sm:text-xs">
               Public site
             </Link>
             <button
-              className="btn-outline !px-3 !py-2 text-xs"
+              className="btn-outline !px-2.5 !py-2 text-[11px] sm:!px-3 sm:text-xs"
               onClick={() => {
                 clearSession();
                 router.replace("/admin/login");
@@ -124,12 +126,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </button>
           </div>
         </div>
-        <div className="mx-auto flex max-w-6xl gap-1 overflow-x-auto px-4 pb-2 sm:px-6">
+        <div className="mx-auto flex max-w-6xl flex-wrap gap-1 px-4 pb-2 sm:px-6">
           {NAV.filter((item) => permissions.includes(item.permission)).map((item) => (
             <Link
               key={item.href}
               href={item.href}
-              className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-[13px] font-medium ${
+              className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[12.5px] font-medium sm:px-3 sm:text-[13px] ${
                 pathname === item.href ? "bg-ink text-white" : "text-ink/60 hover:bg-ink/5"
               }`}
             >

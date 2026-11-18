@@ -132,7 +132,7 @@ export default function AccreditationConsolePage() {
       </Card>
 
       {overview ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Eligible voters" value={overview.stats.eligible_voters} />
           <Stat label="Accredited" value={overview.stats.accredited_voters} />
           <Stat

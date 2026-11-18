@@ -77,12 +77,23 @@
   .pill-gold { @apply pill border-ochre/35 bg-ochre/10 text-[#7A4F14]; }
   .pill-grey { @apply pill border-ink/15 bg-ink/[0.04] text-ink/60; }
   .pill-red { @apply pill border-red-300/60 bg-red-50 text-red-700; }
-  .table-wrap { @apply overflow-x-auto rounded-[8px] border border-rule; }
+  .table-wrap {
+    @apply overflow-x-auto rounded-[8px] border border-rule;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
   .table { @apply w-full text-left text-sm; }
   .table thead th {
     @apply bg-[#EDE7D8] px-3.5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink/60;
   }
   .table tbody td { @apply border-t border-rule px-3.5 py-3 align-top; }
+  /* On a phone the same table has to fit a narrower reading column: tighter
+     cells keep more columns visible before the card starts scrolling. */
+  @media (max-width: 639px) {
+    .table thead th { @apply px-2.5 py-2 text-[10px] tracking-[0.08em]; }
+    .table tbody td { @apply px-2.5 py-2.5 text-[12.5px]; }
+    .table-wrap { @apply rounded-[6px]; }
+  }
   .kv { @apply flex flex-wrap items-baseline justify-between gap-2 border-b border-rule/70 py-2 last:border-0; }
   .kv dt { @apply text-xs text-ink/55; }
   .kv dd { @apply text-sm font-medium text-ink; }

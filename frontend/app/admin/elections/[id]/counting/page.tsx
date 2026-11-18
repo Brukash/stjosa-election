@@ -162,7 +162,7 @@ export default function CountingPage() {
 
       {tally ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat label="Accepted ballots" value={tally.totals.accepted_ballots} />
             <Stat label="Valid ballots" value={tally.totals.valid_ballots} />
             <Stat label="Invalid ballots" value={tally.totals.invalid_ballots} />

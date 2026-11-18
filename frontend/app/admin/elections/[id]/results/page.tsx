@@ -176,7 +176,7 @@ export default function ResultsAdminPage() {
 
       {provisional ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat label="Votes cast" value={provisional.totals.votes_cast} />
             <Stat label="Valid ballots" value={provisional.totals.valid_ballots} />
             <Stat label="Invalid ballots" value={provisional.totals.invalid_ballots} />

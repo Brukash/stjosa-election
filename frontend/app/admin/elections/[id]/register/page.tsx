@@ -300,7 +300,7 @@ export default function RegisterPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Registered" value={data.stats.registered_voters} />
         <Stat label="Eligible" value={data.stats.eligible_voters} />
         <Stat label="Accredited" value={data.stats.accredited_voters} />
@@ -558,7 +558,72 @@ export default function RegisterPage() {
 
       <Card className="card-pad">
         <SectionHeading eyebrow="Electoral register" title={`${voters.length} voter record(s)`} />
-        <div className="table-wrap">
+        {/* Phones: the same records as stacked cards, so no voter's status or
+            action sits off-screen behind a sideways scroll. */}
+        <div className="space-y-2 sm:hidden">
+          {voters.map((voter: any) => (
+            <div key={voter.id} className="rounded-[8px] border border-rule bg-surface p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-mono text-[11px] text-ink/50">{voter.voter_id}</p>
+                  <p className="mt-0.5 text-[14px] font-medium leading-snug text-ink">{voter.full_name}</p>
+                  <p className="mt-0.5 break-all text-[11px] text-ink/45">
+                    {voter.email ?? voter.phone ?? "—"}
+                  </p>
+                </div>
+                <span className={voter.register_status === "approved" ? "pill-green" : "pill-grey"}>
+                  {voter.register_status}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-rule/70 pt-2 text-[11px] text-ink/55">
+                <span>Set <span className="font-medium text-ink/75">{voter.alumni_set}</span></span>
+                <span>
+                  WhatsApp <span className="font-medium text-ink/75">{voter.whatsapp_consent ? "opted in" : "no consent"}</span>
+                </span>
+                <span>
+                  Accredited <span className="font-medium text-ink/75">{voter.accredited ? "yes" : "no"}</span>
+                </span>
+                {!voter.is_eligible ? <span className="pill-red">ineligible</span> : null}
+              </div>
+              {(canApprove || (isChairman && !registerLocked)) ? (
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+                  {canApprove && !registerLocked && voter.phone ? (
+                    <button
+                      className="text-[11px] font-semibold text-ink/50 underline hover:text-ink"
+                      onClick={() => toggleWhatsappConsent(voter)}
+                      disabled={busy}
+                    >
+                      {voter.whatsapp_consent ? "Withdraw WhatsApp consent" : "Record WhatsApp consent"}
+                    </button>
+                  ) : null}
+                  {canApprove ? (
+                    <button
+                      className="text-[11px] font-semibold text-ink/50 underline hover:text-ink"
+                      onClick={() => toggleEligibility(voter)}
+                      disabled={busy}
+                    >
+                      {voter.is_eligible ? "Exclude" : "Include"}
+                    </button>
+                  ) : null}
+                  {isChairman && !registerLocked && voter.phone && !voter.whatsapp_consent ? (
+                    <label className="flex items-center gap-1.5 text-[11px] text-ink/55">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-green"
+                        checked={consentSelection.has(voter.id)}
+                        onChange={(event) =>
+                          toggleConsentSelection(voter.id, event.target.checked)
+                        }
+                      />
+                      Select for bulk consent
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        <div className="table-wrap hidden sm:block">
           <table className="table">
             <thead>
               <tr>

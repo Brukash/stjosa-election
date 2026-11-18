@@ -238,7 +238,7 @@ export default function ElectionSetupPage() {
         </Alert>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Eligible voters" value={election.totals.eligible_voters} />
         <Stat label="Accredited" value={election.totals.accredited_voters} />
         <Stat label="Votes cast" value={election.totals.votes_cast} />
