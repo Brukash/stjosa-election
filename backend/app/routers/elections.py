@@ -602,7 +602,7 @@ def set_voter_visibility(
 ):
     """Let the Chairman name the election the public voting pages show."""
     election = get_election(db, election_id)
-    roles = roles_for(db, profile.id)
+    roles = set(roles_for(db, profile.id))
     if not ({"chairman", "super_admin"} & roles):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
