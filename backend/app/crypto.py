@@ -266,8 +266,8 @@ def _provisioning_hint() -> str:
     if detail:
         return f" The configured KEYS_ARCHIVE_B64 could not be restored ({detail})."
     return (
-        " Set KEYS_ARCHIVE_B64 (an encrypted archive of the key directory) "
-        "so the API can serve the ballot."
+        " If this deployment has no key archive yet, set KEYS_ARCHIVE_B64 "
+        "(an encrypted archive of the key directory)."
     )
 
 
@@ -345,7 +345,9 @@ def _election_key_payload(election_id: str, name: str, label: str) -> bytes:
         _materialize_election_keys(election_id, bundle)
         return stored.encode("utf-8")
     raise KeyMaterialError(
-        f"{label} is not provisioned on this deployment." + _provisioning_hint()
+        f"{label} is not provisioned on this deployment. No key file and no stored "
+        "key bundle exist for this election, so its ballots cannot be decrypted and "
+        "it has to be created again." + _provisioning_hint()
     )
 
 
