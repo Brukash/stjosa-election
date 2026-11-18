@@ -46,7 +46,12 @@ export default function ResultsAdminPage() {
     setError("");
     try {
       const declaration = await api(`/api/results/${id}/approve`, { method: "POST", auth: true });
-      setNotice(`Official results declared (version ${declaration.version}) and digitally signed.`);
+      const delivered = declaration?.voter_notifications;
+      const emails =
+        delivered && typeof delivered.email_sent === "number"
+          ? ` Voter result emails: ${delivered.email_sent} sent, ${delivered.email_failed} failed, ${delivered.email_unavailable} unavailable.`
+          : "";
+      setNotice(`Official results declared (version ${declaration.version}) and digitally signed.${emails}`);
       load();
     } catch (err: any) {
       setError(err.message);

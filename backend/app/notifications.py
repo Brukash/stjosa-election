@@ -27,6 +27,7 @@ from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from zoneinfo import ZoneInfo
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -1044,6 +1045,230 @@ def notify_vote_submitted_by_id(
         db.rollback()
     finally:
         db.close()
+
+
+# ── declared results ────────────────────────────────────────────────────────
+def _result_lines(figures: dict) -> list[tuple[str, str]]:
+    """One readable line per position: the declared winner(s) and the vote counts."""
+    lines: list[tuple[str, str]] = []
+    for position in figures.get("positions") or []:
+        title = str(position.get("title") or "Position")
+        candidates = position.get("candidates") or []
+        winners = [name for name in (position.get("winners") or []) if name]
+        if winners:
+            headline = ", ".join(winners)
+        elif candidates:
+            headline = "No candidate returned"
+        else:
+            headline = "No candidates"
+        tally = "; ".join(
+            f"{entry.get('full_name')} {entry.get('votes', 0)}" for entry in candidates
+        )
+        lines.append((title, f"{headline} — votes: {tally}" if tally else headline))
+    return lines
+
+
+def _results_email_body(
+    *,
+    election_title: str,
+    election_reference: str,
+    voter_name: str,
+    declared_label: str,
+    version: int,
+    results_url: str,
+    lines: list[tuple[str, str]],
+    totals: dict,
+) -> tuple[str, str, str]:
+    """Declared-result notice. It reports only official published figures."""
+    subject = f"Official results declared - {election_reference}"
+    totals_text = (
+        f"Votes cast: {totals.get('valid_ballots', 0)} valid of "
+        f"{totals.get('eligible_voters', 0)} eligible voters "
+        f"({totals.get('turnout_percentage', 0)}% turnout)."
+    )
+    text_lines = "\n".join(f"{title}: {summary}" for title, summary in lines) or "No positions."
+    text = (
+        f"Dear {voter_name},\n\n"
+        f"The Electoral Committee has declared the official results of {election_title} "
+        f"({election_reference}) on {declared_label}. This is declaration version {version}.\n\n"
+        f"{text_lines}\n\n"
+        f"{totals_text}\n\n"
+        f"The declaration is digitally signed and published at {results_url}\n\n"
+        f"St. John's College Jos Alumni Election"
+    )
+    rows = "".join(
+        f'<tr><td style="padding:8px 10px;border-bottom:1px solid #E4EBE1;font-size:13px;'
+        f'vertical-align:top"><strong>{html.escape(title)}</strong></td>'
+        f'<td style="padding:8px 10px;border-bottom:1px solid #E4EBE1;font-size:13px">'
+        f"{html.escape(summary)}</td></tr>"
+        for title, summary in lines
+    )
+    html_body = f"""<!doctype html><html><body style="margin:0;background:#F4F6F2;font-family:Arial,sans-serif;color:#1E2A22">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 12px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#fff;border-radius:12px;overflow:hidden">
+<tr><td style="background:#0F3D2E;padding:22px 26px;color:#fff;font-size:18px;font-weight:700">St. John's College Jos Alumni Election</td></tr>
+<tr><td style="height:5px;background:#E7D21C;font-size:0;line-height:0">&nbsp;</td></tr>
+<tr><td style="padding:26px">
+<p style="margin:0 0 12px;font-size:15px">Dear {html.escape(voter_name)},</p>
+<p style="margin:0 0 18px;font-size:14px;line-height:1.6">The Electoral Committee has declared the official results of <strong>{html.escape(election_title)}</strong> ({html.escape(election_reference)}) on {html.escape(declared_label)}. This is declaration version {version}.</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #E4EBE1;border-radius:8px;overflow:hidden">{rows}</table>
+<p style="margin:18px 0 0;font-size:13px;color:#55635A">{html.escape(totals_text)}</p>
+<p style="margin:18px 0 0"><a href="{html.escape(results_url)}" style="display:inline-block;background:#0F3D2E;color:#fff;text-decoration:none;padding:11px 18px;border-radius:7px;font-size:14px;font-weight:600">View the signed declaration</a></p>
+<p style="margin:16px 0 0;font-size:13px;color:#55635A">Every declared version is preserved with its signature. This message contains no record of how any individual voted.</p>
+</td></tr>
+<tr><td style="background:#EEF4EC;padding:16px 26px;font-size:11px;color:#55635A">Published results only. Individual ballots are never disclosed.</td></tr>
+</table></td></tr></table></body></html>"""
+    return subject, text, html_body
+
+
+def _send_results_email(
+    destination: str,
+    *,
+    election_title: str,
+    election_reference: str,
+    voter_name: str,
+    declared_label: str,
+    version: int,
+    results_url: str,
+    lines: list[tuple[str, str]],
+    totals: dict,
+) -> DeliveryResult:
+    provider = _email_provider()
+    try:
+        subject, text, html_body = _results_email_body(
+            election_title=election_title,
+            election_reference=election_reference,
+            voter_name=voter_name,
+            declared_label=declared_label,
+            version=version,
+            results_url=results_url,
+            lines=lines,
+            totals=totals,
+        )
+        if provider == "smtp":
+            message_id, error = _send_smtp(
+                destination, subject, text, html_body,
+                timeout_seconds=settings.vote_confirmation_timeout_seconds,
+            )
+        elif provider == "resend":
+            message_id, error = _send_resend(
+                destination, subject, text, html_body,
+                timeout_seconds=settings.vote_confirmation_timeout_seconds,
+                attempts=1,
+            )
+        else:
+            message_id, error = None, "email provider is not configured"
+    except Exception as exc:
+        message_id, error = None, f"email delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="email",
+        provider=provider or "none",
+        status="failed" if error else "sent",
+        recipient_masked=mask_email(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
+
+
+def notify_results_declared(
+    db: Session,
+    *,
+    election: Election,
+    figures: dict,
+    declared_at: datetime,
+    version: int,
+    request_ip: str | None = None,
+) -> dict:
+    """Email the declared result to every approved voter after a declaration.
+
+    The declaration is already committed when this runs, so a slow or failing
+    provider can never roll it back. Each voter receives an individual message
+    (never a shared recipient list) containing only the official public figures.
+    """
+    summary = {
+        "voters": 0,
+        "email_sent": 0,
+        "email_failed": 0,
+        "email_unavailable": 0,
+    }
+    voters = db.execute(
+        select(Voter).where(
+            Voter.election_id == election.id,
+            Voter.is_eligible.is_(True),
+            Voter.register_status == "approved",
+        ).order_by(Voter.full_name)
+    ).scalars().all()
+    summary["voters"] = len(voters)
+    if not settings.email_configured:
+        summary["email_unavailable"] = len(voters)
+        return summary
+
+    lines = _result_lines(figures)
+    totals = figures.get("totals") or {}
+    declared_label = _vote_submitted_label(election, declared_at)
+    results_url = f"{settings.app_origin.rstrip('/')}/results"
+
+    seen: set[str] = set()
+    attempts: list[tuple[Voter, str]] = []
+    for voter in voters:
+        email = (voter.email or "").strip()
+        if not email or email.lower() in seen:
+            summary["email_unavailable"] += 1
+            continue
+        seen.add(email.lower())
+        attempts.append((voter, email))
+
+    if not attempts:
+        return summary
+
+    with ThreadPoolExecutor(max_workers=min(8, len(attempts))) as executor:
+        futures = {
+            executor.submit(
+                _send_results_email,
+                email,
+                election_title=election.title,
+                election_reference=election.reference,
+                voter_name=voter.full_name,
+                declared_label=declared_label,
+                version=version,
+                results_url=results_url,
+                lines=lines,
+                totals=totals,
+            ): voter
+            for voter, email in attempts
+        }
+        for future, voter in futures.items():
+            try:
+                result = future.result()
+            except Exception as exc:
+                result = DeliveryResult(
+                    channel="email",
+                    provider="unknown",
+                    status="failed",
+                    recipient_masked="***",
+                    error=f"notification worker failed ({type(exc).__name__})",
+                )
+            if result.status == "sent":
+                summary["email_sent"] += 1
+            else:
+                summary["email_failed"] += 1
+            db.add(
+                NotificationDelivery(
+                    election_id=election.id,
+                    voter_row_id=voter.id,
+                    challenge_id=None,
+                    purpose="results_declared",
+                    channel=result.channel,
+                    provider=result.provider,
+                    status=result.status,
+                    recipient_masked=result.recipient_masked,
+                    provider_message_id=result.provider_message_id,
+                    error=(result.error or "")[:300] or None,
+                    request_ip=request_ip,
+                )
+            )
+    db.commit()
+    return summary
 
 
 # ── entry point ─────────────────────────────────────────────────────────────

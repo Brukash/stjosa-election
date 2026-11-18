@@ -25,6 +25,7 @@ from ..models import (
     TallyRun,
 )
 from ..schemas import CorrectionRequest, ResultSubmit
+from ..notifications import notify_results_declared
 from ..security import has_permission
 from ..services import election_stats, find_active_election, get_election, now
 from ..receipts import fmt
@@ -312,7 +313,22 @@ def approve_and_declare(
     ))
     db.commit()
     db.refresh(declaration)
-    return declaration_dict(db, declaration, election)
+    payload = declaration_dict(db, declaration, election)
+    # The declaration is already committed, so voters' result emails can never
+    # delay or roll it back. The delivery summary is reported back to the admin.
+    try:
+        payload["voter_notifications"] = notify_results_declared(
+            db,
+            election=election,
+            figures=declaration.figures,
+            declared_at=declaration.declared_at,
+            version=declaration.version,
+            request_ip=client_ip(request),
+        )
+    except Exception:
+        db.rollback()
+        payload["voter_notifications"] = {"error": "result emails could not be sent"}
+    return payload
 
 
 @router.post("/{election_id}/corrections")
