@@ -68,6 +68,75 @@ function overflow(page) {
   });
 }
 
+const READ_ONLY = process.env.READ_ONLY === "1";
+
+const PUBLIC_PAGES = [
+  { path: "/", name: "home" },
+  { path: "/accredit", name: "accredit" },
+  { path: "/vote", name: "vote" },
+  { path: "/results", name: "results" },
+  { path: "/verify", name: "verify" },
+  { path: "/commitments", name: "commitments" },
+];
+
+/**
+ * Read-only pass over the public pages: useful against a live site, where a
+ * test must never cast a real ballot. It checks that each page responds, has a
+ * heading, shows no error message, does not scroll sideways at 390px, and
+ * produces no console errors or failed requests.
+ */
+async function readOnlyPass(page, shot) {
+  console.log(`Read-only page check on ${FRONTEND}`);
+  for (const entry of PUBLIC_PAGES) {
+    browserErrors.length = 0;
+    failedRequests.length = 0;
+    const response = await page.goto(`${FRONTEND}${entry.path}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+    check(
+      `${entry.name}: page responds`,
+      Boolean(response && response.status() < 400),
+      `HTTP ${response?.status()}`
+    );
+    try {
+      await page.waitForLoadState("networkidle", { timeout: 15000 });
+    } catch {
+      // a page that keeps a request open is not a failure by itself
+    }
+    await page.waitForTimeout(800);
+    const heading = (await page
+      .locator("h1")
+      .first()
+      .innerText()
+      .catch(() => ""))?.trim();
+    check(`${entry.name}: renders a heading`, Boolean(heading), `got "${heading}"`);
+    const errorBoxes = await page.locator('[class*="border-clay"]').allInnerTexts();
+    check(
+      `${entry.name}: no error message`,
+      errorBoxes.length === 0,
+      errorBoxes.join(" | ").slice(0, 160)
+    );
+    await shot(`public-${entry.name}`);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const narrow = await overflow(page);
+    check(`${entry.name}: fits 390px without sideways scroll`, narrow <= 0, `${narrow}px`);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    check(
+      `${entry.name}: no console errors`,
+      browserErrors.length === 0,
+      browserErrors.slice(0, 2).join(" | ")
+    );
+    check(
+      `${entry.name}: no failed requests`,
+      failedRequests.length === 0,
+      failedRequests.slice(0, 2).join(" | ")
+    );
+  }
+}
+
 async function main() {
   const executablePath = findChromium();
   if (!executablePath) {
@@ -92,6 +161,12 @@ async function main() {
   });
 
   const shot = async (name) => page.screenshot({ path: join(SHOTS, `${name}.png`), fullPage: false });
+
+  if (READ_ONLY) {
+    await readOnlyPass(page, shot);
+    await browser.close();
+    return;
+  }
 
   // ── 1. accreditation ───────────────────────────────────────────────────────
   await page.goto(`${FRONTEND}/accredit`, { waitUntil: "domcontentloaded", timeout: 90000 });
