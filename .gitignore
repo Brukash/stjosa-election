@@ -31,3 +31,6 @@ frontend/next-env.d.ts
 
 # Local design review screenshots (large, regenerated per review)
 design/audit/
+
+# local review captures
+screenshots/
