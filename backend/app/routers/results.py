@@ -24,10 +24,10 @@ from ..models import (
     TallyProof,
     TallyRun,
 )
-from ..schemas import CorrectionRequest, ResultSubmit
+from ..schemas import CorrectionRequest, ResultSubmit, STATUS_LABELS
 from ..notifications import notify_results_declared
 from ..security import has_permission
-from ..services import election_stats, find_active_election, get_election, now
+from ..services import election_stats, find_results_election, get_election, now
 from ..receipts import fmt
 
 router = APIRouter(prefix="/results", tags=["results"])
@@ -266,7 +266,11 @@ def submit_results(
     if not run:
         raise HTTPException(status.HTTP_409_CONFLICT, "Counting has not been completed")
     if election.status != "provisional_results":
-        raise HTTPException(status.HTTP_409_CONFLICT, "Provisional results are not awaiting submission")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Provisional results are not awaiting submission (this election is "
+            f"{STATUS_LABELS.get(election.status, election.status).lower()})",
+        )
     # The office the account is acting in, so the trail names the real official.
     role_key = "chairman" if has_permission(roles_for(db, profile.id), "results.approve") else "returning_officer"
     single_official = role_key == "chairman"
@@ -309,7 +313,11 @@ def approve_and_declare(
 ):
     election = get_election(db, election_id)
     if election.status != "under_review":
-        raise HTTPException(status.HTTP_409_CONFLICT, "Results must be submitted for review before approval")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Results must be submitted for review before approval (this election is "
+            f"{STATUS_LABELS.get(election.status, election.status).lower()})",
+        )
     run = _latest_run(db, election.id)
     if not run:
         raise HTTPException(status.HTTP_409_CONFLICT, "Counting has not been completed")
@@ -398,7 +406,7 @@ def correct_declaration(
 
 @router.get("/public/current")
 def public_current(db: Session = Depends(get_db)):
-    election = find_active_election(db)
+    election = find_results_election(db)
     if not election:
         return {"published": False, "election": None}
     return _public_results(db, election)

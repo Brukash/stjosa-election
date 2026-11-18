@@ -92,6 +92,23 @@ def find_active_election(db: Session) -> Election | None:
     return db.execute(select(Election).order_by(Election.created_at.desc())).scalars().first()
 
 
+# The public results page is about counted and declared figures, so the election
+# furthest through the count wins. find_active_election prefers voting_open,
+# which is right for the ballot entry point but would hand the results page a
+# rehearsal election that has never been counted.
+RESULTS_STATUS_ORDER = ("declared", "under_review", "provisional_results", "counting", "voting_closed")
+
+
+def find_results_election(db: Session) -> Election | None:
+    for state in RESULTS_STATUS_ORDER:
+        election = db.execute(
+            select(Election).where(Election.status == state).order_by(Election.created_at.desc())
+        ).scalars().first()
+        if election:
+            return election
+    return find_active_election(db)
+
+
 def resolve_public_election(db: Session, election_id: str | None) -> Election:
     election = get_election(db, election_id) if election_id else find_active_election(db)
     if not election:

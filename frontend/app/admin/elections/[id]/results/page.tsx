@@ -36,6 +36,8 @@ export default function ResultsAdminPage() {
       load();
     } catch (err: any) {
       setError(err.message);
+      // Another tab may already have moved the election on; show what is true now.
+      if (err?.status === 409) load();
     } finally {
       setBusy(false);
     }
@@ -58,6 +60,7 @@ export default function ResultsAdminPage() {
       load();
     } catch (err: any) {
       setError(err.message);
+      if (err?.status === 409) load();
     } finally {
       setBusy(false);
     }
@@ -105,8 +108,10 @@ export default function ResultsAdminPage() {
 
       <Card className="card-pad">
         <SectionHeading eyebrow="Declaration workflow" title="Provisional → approval → declaration">
-          The Returning Officer submits provisional results; only the Electoral Committee Chairman can
-          approve and declare them. Every version is preserved with signatures.
+          The Returning Officer submits provisional results for the Electoral Committee Chairman to
+          approve and declare. The Chairman may carry out both steps; when one account does, the
+          approval trail records it as a single-official declaration. Every version is preserved with
+          signatures.
         </SectionHeading>
         <div className="grid gap-2 sm:grid-cols-3">
           {[
