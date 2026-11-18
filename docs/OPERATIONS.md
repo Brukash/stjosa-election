@@ -217,6 +217,19 @@ npm run start
 | Tally key per election | `keys/elections/<id>/tally_private.enc` | Same envelope | HSM/KMS for production, dual-control release |
 | Signing key per election | `keys/elections/<id>/signing_private.enc` | Same envelope | Public key published with results |
 
+Election keys are also kept as an encrypted bundle on the election row (`elections.key_material`),
+because Vercel discards the instance-local key directory. It is the same AES-256-GCM envelope as the
+files on disk; back up the row with the database and `MASTER_KEY` separately. Key files that still
+exist on the machine that created them can be copied onto their rows with:
+
+```bash
+cd backend
+.venv/Scripts/python.exe scripts/backfill_key_material.py --env-file .env.supabase --apply
+```
+
+An election created on a serverless deployment before this column existed has no recoverable keys:
+its ballots cannot be decrypted and the election must be recreated.
+
 Rotating `MASTER_KEY` requires re-encrypting the key files before restarting (decrypt with old key,
 encrypt with new). Removing an election's key directory destroys the ability to decrypt its ballots —
 archive it under dual control for the retention period.

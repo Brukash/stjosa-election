@@ -503,6 +503,9 @@ def approve_configuration(
         keys = crypto.create_election_keys(election.id)
         election.tally_public_key = keys["tally_public_key"]
         election.signing_public_key = keys["signing_public_key"]
+        # Keep the encrypted key files with the election: this deployment's disk
+        # is discarded between instances, so counting would otherwise be impossible.
+        election.key_material = keys["key_material"]
         election.credential_public_key = json.dumps(crypto.credential_public_numbers())
         election.status = "approved"
         election.approved_by = profile.id

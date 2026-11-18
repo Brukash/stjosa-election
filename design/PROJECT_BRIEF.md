@@ -96,7 +96,7 @@ No gradients, no glass, no purple, no glow.
 | Results | done | done | done | done | partial (declared-results layout unseen) |
 | Commitments | done | done | done | done | done |
 | Receipt | done | done | done | done | done |
-| Admin | tokens inherited only (out of scope) | — | — | — | — |
+| Admin | responsive pass done (390 / 1440; tabs wrap, stat cards 2-up, register becomes cards on phones) | — | — | — | partial (768 and the counting/results tabs not re-inspected) |
 
 ## Decision log
 
@@ -155,3 +155,19 @@ No gradients, no glass, no purple, no glow.
 - 2026-11-17 — Local demo data touched only by accreditation (SJC/AL/2004/002, SJC/AL/2005/003) and
   one prepared-but-never-cast ballot, to inspect the real ballot at 390. No vote was counted; no
   production data or deployment touched.
+- 2026-11-18 — Scope extension: the user asked to "optimise the app to be responsive", so the admin
+  area is now in scope for responsiveness only (no visual redesign, no behaviour change). Fixed at
+  390: admin nav and workspace tabs switched from hidden horizontal scroll to wrapping; the header
+  keeps one row and truncates the name; stat cards go 2-up; the register shows stacked cards below
+  `sm` with all columns, consent and eligibility actions, while the table returns at `sm`+; table
+  cells tighten below `sm`. Public routes measured clean (no horizontal overflow) at 320, 390 and
+  1440 before any change. Local demo data gained one accreditation (SJC/AL/2013/019, credential only,
+  no ballot cast) to reach the real ballot at 390.
+- 2026-11-18 — Production counting blocked: "the election signing private key is not provisioned on
+  this deployment". Cause: election keys are generated into the key directory, and a Vercel
+  function's directory is instance-local, so keys created on the deployment are gone by the time
+  counting runs (two production elections have no keys anywhere). Fix: the same AES-256-GCM bundle
+  is saved on `elections.key_material` at key creation and loaded when the file is absent, and
+  `scripts/backfill_key_material.py` copies on-disk keys onto their rows. Ciphertext only; plaintext
+  keys still never touch the database and no endpoint returns the column. Elections `9f677830` and
+  `66ca2910` were keyed only on a discarded instance and cannot be recovered; they must be recreated.

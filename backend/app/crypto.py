@@ -246,6 +246,14 @@ def _public_pem(key) -> bytes:
     )
 
 
+ELECTION_KEY_FILES = (
+    "tally_private.enc",
+    "tally_public.pem",
+    "signing_private.enc",
+    "signing_public.pem",
+)
+
+
 def election_key_dir(election_id: str) -> Path:
     # Reading must not try to create the directory: on a read-only serverless
     # filesystem the mkdir itself is what failed, hiding the real cause.
@@ -263,14 +271,13 @@ def _provisioning_hint() -> str:
     )
 
 
-def _required_key(path: Path, load: Callable[[bytes], object], label: str, encrypted: bool = False):
-    """Read a key file, reporting absence as a provisioning problem."""
+def _load_key_payload(payload: bytes, load: Callable[[bytes], object], label: str,
+                      encrypted: bool = False):
+    """Decode one key payload, reporting unreadable material as a setup error."""
     try:
-        return _cached_key_file(path, load, encrypted=encrypted)
-    except FileNotFoundError as exc:
-        raise KeyMaterialError(
-            f"{label} is not provisioned on this deployment." + _provisioning_hint()
-        ) from exc
+        if encrypted:
+            payload = decrypt_secret(payload.decode())
+        return load(payload)
     except KeyMaterialError:
         raise
     except Exception as exc:  # noqa: BLE001 - unreadable key material is a setup error
@@ -280,25 +287,94 @@ def _required_key(path: Path, load: Callable[[bytes], object], label: str, encry
         ) from exc
 
 
+def stored_key_bundle(election_id: str) -> dict[str, str]:
+    """The encrypted key files saved on the election row, if any.
+
+    Private keys never leave this process unencrypted; the bundle is the same
+    AES-256-GCM envelope that sits on disk, kept where it survives a serverless
+    instance being replaced.
+    """
+    try:
+        from sqlalchemy import select
+
+        from .db import SessionLocal
+        from .models import Election
+
+        with SessionLocal() as db:
+            raw = db.scalar(select(Election.key_material).where(Election.id == election_id))
+    except Exception:  # noqa: BLE001 - a missing bundle is reported as missing keys
+        return {}
+    if not raw:
+        return {}
+    try:
+        bundle = json.loads(raw)
+    except ValueError:
+        return {}
+    return bundle if isinstance(bundle, dict) else {}
+
+
+def _materialize_election_keys(election_id: str, bundle: dict[str, str]) -> None:
+    """Write a stored bundle into the key directory so later loads hit the file."""
+    directory = election_key_dir(election_id)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in ELECTION_KEY_FILES:
+            content = bundle.get(name)
+            if isinstance(content, str) and not (directory / name).exists():
+                (directory / name).write_text(content, encoding="utf-8")
+    except OSError:
+        # A read-only filesystem still works: the payload is used in memory.
+        pass
+
+
+def _election_key_payload(election_id: str, name: str, label: str) -> bytes:
+    """Read one election key file, falling back to the copy stored on the row.
+
+    Serverless hosts discard the instance-local key directory, so an election
+    created there used to lose its private keys and could never be counted.
+    The encrypted files travel with the election, which is what this reads.
+    """
+    path = election_key_dir(election_id) / name
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        pass
+    bundle = stored_key_bundle(election_id)
+    stored = bundle.get(name)
+    if isinstance(stored, str):
+        _materialize_election_keys(election_id, bundle)
+        return stored.encode("utf-8")
+    raise KeyMaterialError(
+        f"{label} is not provisioned on this deployment." + _provisioning_hint()
+    )
+
+
 def create_election_keys(election_id: str) -> dict:
     """Generate tally (RSA-OAEP) and record-signing (Ed25519) key pairs.
 
-    Private keys are written encrypted to the key directory; they are never
-    stored in the database. Returns the public material.
+    Private keys are written encrypted to the key directory and returned as an
+    encrypted bundle for the caller to save on the election row, because a
+    serverless deployment throws its key directory away. Returns the public
+    material and the bundle; plaintext private keys never leave this function.
     """
     directory = election_key_dir(election_id)
     directory.mkdir(parents=True, exist_ok=True)
     tally = rsa.generate_private_key(public_exponent=65537, key_size=3072)
     signer = ed25519.Ed25519PrivateKey.generate()
 
-    (directory / "tally_private.enc").write_text(encrypt_secret(_private_pem(tally)))
-    (directory / "tally_public.pem").write_text(_public_pem(tally.public_key()).decode())
-    (directory / "signing_private.enc").write_text(encrypt_secret(_private_pem(signer)))
-    (directory / "signing_public.pem").write_text(_public_pem(signer.public_key()).decode())
+    material = {
+        "tally_private.enc": encrypt_secret(_private_pem(tally)),
+        "tally_public.pem": _public_pem(tally.public_key()).decode(),
+        "signing_private.enc": encrypt_secret(_private_pem(signer)),
+        "signing_public.pem": _public_pem(signer.public_key()).decode(),
+    }
+    for name in ELECTION_KEY_FILES:
+        (directory / name).write_text(material[name], encoding="utf-8")
 
     return {
-        "tally_public_key": _public_pem(tally.public_key()).decode(),
-        "signing_public_key": _public_pem(signer.public_key()).decode(),
+        "tally_public_key": material["tally_public.pem"],
+        "signing_public_key": material["signing_public.pem"],
+        "key_material": json.dumps(material),
     }
 
 
@@ -324,21 +400,21 @@ def tally_public_key_from_pem(pem: str | None) -> rsa.RSAPublicKey:
 
 
 def tally_private_key(election_id: str) -> rsa.RSAPrivateKey:
-    path = election_key_dir(election_id) / "tally_private.enc"
-    return _required_key(
-        path,
+    label = "The election tally private key"
+    return _load_key_payload(
+        _election_key_payload(election_id, "tally_private.enc", label),
         lambda pem: serialization.load_pem_private_key(pem, None),
-        "The election tally private key",
+        label,
         encrypted=True,
     )
 
 
 def signing_private_key(election_id: str) -> ed25519.Ed25519PrivateKey:
-    path = election_key_dir(election_id) / "signing_private.enc"
-    return _required_key(
-        path,
+    label = "The election signing private key"
+    return _load_key_payload(
+        _election_key_payload(election_id, "signing_private.enc", label),
         lambda pem: serialization.load_pem_private_key(pem, None),
-        "The election signing private key",
+        label,
         encrypted=True,
     )
 

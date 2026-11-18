@@ -179,8 +179,9 @@ Detailed steps, backup/recovery and election-day procedures: `docs/OPERATIONS.md
 
 - The database has no join path from a voter to a ballot, a selection, or a credential serial.
   Receipts store only `sha256(reference)`; verification references are 160-bit random values.
-- Tally private keys never enter the database: they are encrypted with a key derived from
-  `MASTER_KEY` and stored under `backend/keys/`.
+- Private election keys are never stored in plaintext: they are encrypted with `MASTER_KEY` and
+  written under `backend/keys/`, and the same encrypted envelope is saved on the election row so a
+  serverless deployment can still count after its instance disk is discarded.
 - Passwords use scrypt; staff JWTs are HS256 and expire; TOTP MFA can be enrolled per account.
 - Every administrative action is audited; audit logs are append-only (enforced by trigger on
   PostgreSQL).

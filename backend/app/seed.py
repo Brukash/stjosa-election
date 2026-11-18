@@ -219,6 +219,7 @@ def seed_database(db: Session) -> dict:
     keys = crypto.create_election_keys(election.id)
     election.tally_public_key = keys["tally_public_key"]
     election.signing_public_key = keys["signing_public_key"]
+    election.key_material = keys["key_material"]
     election.credential_public_key = json.dumps(crypto.credential_public_numbers())
 
     for role_key, profile in (("chairman", accounts["chairman"]),

@@ -4,7 +4,9 @@ Design rules enforced here (SRS §11.7):
   * Voter identity records and ballot records live in separate tables.
   * No ballot/challenged-ballot table has a voter foreign key.
   * Credential issuance rows never store the anonymous credential serial.
-  * Tally private keys are never stored in the database (see crypto.py / keys dir).
+  * Private keys are stored as AES-256-GCM envelopes under MASTER_KEY. An encrypted
+    copy rides on the election row (``key_material``) because a serverless host
+    discards its key directory; the plaintext key never enters the database.
 """
 from __future__ import annotations
 
@@ -106,6 +108,9 @@ class Election(Base, TimestampMixin):
     tally_public_key: Mapped[str | None] = mapped_column(Text)
     signing_public_key: Mapped[str | None] = mapped_column(Text)
     credential_public_key: Mapped[str | None] = mapped_column(Text)
+    # Encrypted copy of this election's key files, so counting still works after
+    # a serverless instance (and its instance-local key directory) is replaced.
+    key_material: Mapped[str | None] = mapped_column(Text)
 
 
 class ElectionPosition(Base, TimestampMixin):

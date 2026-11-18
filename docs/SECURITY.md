@@ -5,6 +5,9 @@
 ### 1.1 Anonymous credential (RSA-FDH blind signature)
 
 - Issuer key: RSA 2048-bit, stored encrypted under `MASTER_KEY` (`backend/keys/credential_issuer_private.pem`).
+- Per-election tally and signing keys use the same envelope. Because a serverless host discards its
+  instance-local key directory, the encrypted copy is also stored on the election row
+  (`elections.key_material`). Only `MASTER_KEY` can open it and no endpoint returns it.
 - Client generates a 256-bit secret token `t`, computes `h = FDH("SJC-CRED|<election>|<t>")` where
   `FDH` is SHA-256 + MGF1 mapped into `Z_n` (`shadow` of RSA-FDH).
 - Client picks `r` coprime to `n`, sends `h · r^e mod n`.
