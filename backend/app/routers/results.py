@@ -359,7 +359,7 @@ def approve_and_declare(
     db.refresh(declaration)
     payload = declaration_dict(db, declaration, election)
     payload["single_official_declaration"] = single_official
-    # The declaration is already committed, so voters' result emails can never
+    # The declaration is already committed, so voters' result notices can never
     # delay or roll it back. The delivery summary is reported back to the admin.
     try:
         payload["voter_notifications"] = notify_results_declared(
@@ -372,7 +372,7 @@ def approve_and_declare(
         )
     except Exception:
         db.rollback()
-        payload["voter_notifications"] = {"error": "result emails could not be sent"}
+        payload["voter_notifications"] = {"error": "result notices could not be sent"}
     return payload
 
 

@@ -1,13 +1,14 @@
-"""Focused tests for the declared-results voter email path.
+"""Focused tests for the declared-results voter notification path.
 
 Runs the real FastAPI app against a temporary SQLite database and a local mock
 Resend provider that can be told to reject specific recipients.
 
 Covers:
-  * only approved, eligible voters are emailed;
+  * only approved, eligible voters are notified;
   * duplicate addresses are skipped and count as unavailable;
   * a delivery row is recorded for every attempted send, sent or failed;
-  * a provider failure never breaks or rolls back the declaration.
+  * a provider failure never breaks or rolls back the declaration;
+  * SMS and WhatsApp carry the same one-screen declared-result summary.
 
 Run:  .venv/Scripts/python.exe scripts/test_results_notifications.py
 """
@@ -59,10 +60,13 @@ from app.models import (  # noqa: E402
     ResultDeclaration,
     Voter,
 )
+from app.config import settings  # noqa: E402
 from app.notifications import (  # noqa: E402
     _result_lines,
     mask_email,
     notify_results_declared,
+    send_results_sms,
+    send_results_whatsapp,
 )
 
 # The same flow runs twice: once with the Returning Officer submitting (the
@@ -91,7 +95,11 @@ class MockEmailProvider(BaseHTTPRequestHandler):
             payload = {"message": "simulated provider rejection"}
             self.send_response(500)
         else:
-            payload = {"id": f"email-mock-{len(CAPTURED)}"}
+            payload = {
+                "id": f"email-mock-{len(CAPTURED)}",
+                "message_id": f"termii-mock-{len(CAPTURED)}",
+                "messages": [{"id": f"wamid.mock.{len(CAPTURED)}"}],
+            }
             self.send_response(200)
         self.send_header("content-type", "application/json")
         self.end_headers()
@@ -227,10 +235,80 @@ def check_result_lines() -> None:
     ok("an uncontested zero-vote position says no votes were cast")
 
 
+def check_result_channel_senders() -> None:
+    """SMS and WhatsApp carry the same one-screen declared-result summary.
+
+    The main flow configures email only, so these senders are exercised directly
+    with their settings temporarily pointed at the same mock provider.
+    """
+    reference = "SJCJ-ALUMNI-2099-0001"
+    results_url = "http://localhost:3000/results"
+    original = {
+        "sms_provider": settings.sms_provider,
+        "termii_api_key": settings.termii_api_key,
+        "termii_sender_id": settings.termii_sender_id,
+        "termii_api_base": settings.termii_api_base,
+        "whatsapp_provider": settings.whatsapp_provider,
+        "whatsapp_access_token": settings.whatsapp_access_token,
+        "whatsapp_phone_number_id": settings.whatsapp_phone_number_id,
+        "whatsapp_api_base": settings.whatsapp_api_base,
+        "whatsapp_results_template_name": settings.whatsapp_results_template_name,
+        "whatsapp_results_template_language": settings.whatsapp_results_template_language,
+    }
+    settings.sms_provider = "termii"
+    settings.termii_api_key = "test-termii-key"
+    settings.termii_sender_id = "SJC-ALUMNI"
+    settings.termii_api_base = f"http://127.0.0.1:{MOCK_PORT}"
+    settings.whatsapp_provider = "meta"
+    settings.whatsapp_access_token = "test-wa-token"
+    settings.whatsapp_phone_number_id = "123456789"
+    settings.whatsapp_api_base = f"http://127.0.0.1:{MOCK_PORT}"
+    settings.whatsapp_results_template_name = "sjc_results_declared"
+    settings.whatsapp_results_template_language = "en_US"
+    try:
+        start = len(CAPTURED)
+        sms = send_results_sms(
+            election_reference=reference,
+            results_url=results_url,
+            destination="+2348031234567",
+        )
+        whatsapp = send_results_whatsapp(
+            voter_name="Amina Bello",
+            election_title="Alumni Election 2026",
+            results_url=results_url,
+            destination="+2348031234567",
+        )
+        calls = CAPTURED[start:]
+        assert sms.status == "sent" and sms.provider == "termii", sms
+        assert whatsapp.status == "sent" and whatsapp.provider == "meta", whatsapp
+        assert len(calls) == 2, [call["path"] for call in calls]
+
+        sms_call = next(call for call in calls if call["path"] == "/api/sms/send")
+        assert sms_call["body"]["to"] == "+2348031234567", sms_call["body"]
+        assert "official results declared" in sms_call["body"]["sms"], sms_call["body"]["sms"]
+        assert results_url in sms_call["body"]["sms"], sms_call["body"]["sms"]
+        assert len(sms_call["body"]["sms"]) <= 160, len(sms_call["body"]["sms"])
+
+        whatsapp_call = next(call for call in calls if call["path"] == "/123456789/messages")
+        template = whatsapp_call["body"]["template"]
+        assert template["name"] == "sjc_results_declared", template
+        parameters = template["components"][0]["parameters"]
+        assert [item["text"] for item in parameters] == [
+            "Amina Bello",
+            "Alumni Election 2026",
+            results_url,
+        ], parameters
+    finally:
+        for key, value in original.items():
+            setattr(settings, key, value)
+    ok("SMS and WhatsApp carry the one-screen declared-result summary")
+
+
 def main() -> None:
     check_result_lines()
     server = ThreadingHTTPServer(("127.0.0.1", MOCK_PORT), MockEmailProvider)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    check_result_channel_senders()
 
     with TestClient(app) as client:
         election = client.get("/api/public/election").json()["election"]
@@ -307,6 +385,15 @@ def main() -> None:
             "email_sent": 2,
             "email_failed": 1,
             "email_unavailable": 2,  # duplicate address + missing address
+            # This run configures email only; the SMS and WhatsApp senders are
+            # checked directly below against the same mock provider.
+            "sms_sent": 0,
+            "sms_failed": 0,
+            "sms_unavailable": 5,
+            "whatsapp_sent": 0,
+            "whatsapp_failed": 0,
+            "whatsapp_unavailable": 5,
+            "whatsapp_no_consent": 0,
         }, summary
         assert len(calls) == 3, [(call["body"]["to"], call["body"]["subject"]) for call in calls]
         assert all(len(call["recipients"]) == 1 for call in calls), \
@@ -455,6 +542,13 @@ def main() -> None:
                 "email_sent": 0,
                 "email_failed": 3,
                 "email_unavailable": 2,
+                "sms_sent": 0,
+                "sms_failed": 0,
+                "sms_unavailable": 5,
+                "whatsapp_sent": 0,
+                "whatsapp_failed": 0,
+                "whatsapp_unavailable": 5,
+                "whatsapp_no_consent": 0,
             }, outage
         with SessionLocal() as db:
             stored_election = db.get(Election, election_id)

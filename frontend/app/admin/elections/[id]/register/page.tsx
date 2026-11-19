@@ -125,6 +125,8 @@ export default function RegisterPage() {
       const delivery = n
         ? ` Email: ${n.email_sent ?? 0} sent, ${n.email_failed ?? 0} failed, ` +
           `${n.email_unavailable ?? 0} unavailable. ` +
+          `SMS: ${n.sms_sent ?? 0} sent, ${n.sms_failed ?? 0} failed, ` +
+          `${n.sms_unavailable ?? 0} unavailable. ` +
           `WhatsApp: ${n.whatsapp_sent ?? 0} sent, ${n.whatsapp_failed ?? 0} failed, ` +
           `${(n.whatsapp_unavailable ?? 0) + (n.whatsapp_no_consent ?? 0)} unavailable.`
         : "";

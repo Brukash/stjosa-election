@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Alert, Loading, StatusPill } from "@/components/ui";
-import { api, can, getProfile } from "@/lib/api";
+import { api, can, ELECTION_UPDATED_EVENT, getProfile } from "@/lib/api";
 
 const TABS = [
   { segment: "", label: "Setup & verification", permissions: ["election.view"] },
@@ -25,9 +25,15 @@ export default function ElectionWorkspaceLayout({ children }: { children: React.
 
   useEffect(() => {
     if (!id) return;
-    api(`/api/elections/${id}`, { auth: true })
-      .then(setElection)
-      .catch((err) => setError(err.message));
+    const refresh = () =>
+      api(`/api/elections/${id}`, { auth: true })
+        .then(setElection)
+        .catch((err) => setError(err.message));
+    refresh();
+    // Pages inside the workspace report successful actions, so the header
+    // status and configuration hash follow along without a full reload.
+    window.addEventListener(ELECTION_UPDATED_EVENT, refresh);
+    return () => window.removeEventListener(ELECTION_UPDATED_EVENT, refresh);
   }, [id]);
 
   if (error) return <Alert tone="error">{error}</Alert>;

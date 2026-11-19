@@ -59,6 +59,15 @@ export function clearSession() {
   window.localStorage.removeItem(PROFILE_KEY);
 }
 
+// Actions inside an election workspace change its status or configuration hash.
+// The workspace header loads the election once, so it listens for this event;
+// without it the pill and hash keep showing the previous step until a reload.
+export const ELECTION_UPDATED_EVENT = "sjc:election-updated";
+
+export function notifyElectionUpdated() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(ELECTION_UPDATED_EVENT));
+}
+
 export function can(profile: any, permission: string): boolean {
   return Array.isArray(profile?.permissions) && profile.permissions.includes(permission);
 }

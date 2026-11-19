@@ -29,6 +29,10 @@ os.environ.update(
         "RESEND_API_KEY": "test-resend-key",
         "EMAIL_FROM": "SJC Election <election@example.test>",
         "EMAIL_API_BASE": "http://127.0.0.1:8899",
+        "SMS_PROVIDER": "termii",
+        "TERMII_API_KEY": "test-termii-key",
+        "TERMII_SENDER_ID": "SJC-ALUMNI",
+        "TERMII_API_BASE": "http://127.0.0.1:8899",
         "WHATSAPP_PROVIDER": "meta",
         "WHATSAPP_ACCESS_TOKEN": "test-wa-token",
         "WHATSAPP_PHONE_NUMBER_ID": "123456789",
@@ -37,6 +41,8 @@ os.environ.update(
         "WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE": "en_US",
         "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME": "sjc_vote_confirmation",
         "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE": "en_US",
+        "WHATSAPP_RESULTS_TEMPLATE_NAME": "sjc_results_declared",
+        "WHATSAPP_RESULTS_TEMPLATE_LANGUAGE": "en_US",
         "WHATSAPP_APP_SECRET": "test-app-secret",
         "WHATSAPP_VERIFY_TOKEN": "test-verify-token",
         "DEMO_SEED": "true",
@@ -204,14 +210,19 @@ def main() -> None:
         notice_calls = CAPTURED[notice_start:]
         assert notice["voters"] == eligible, notice
         assert notice["email_sent"] == eligible, notice
+        assert notice["sms_sent"] == eligible, notice
         assert notice["whatsapp_sent"] == eligible - 1, notice
         assert notice["whatsapp_no_consent"] == 1, notice
-        assert notice["email_failed"] == 0 and notice["whatsapp_failed"] == 0, notice
-        assert len(notice_calls) == 2 * eligible - 1, [call["path"] for call in notice_calls]
+        assert notice["email_failed"] == 0 and notice["sms_failed"] == 0, notice
+        assert notice["whatsapp_failed"] == 0, notice
+        assert len(notice_calls) == 3 * eligible - 1, [call["path"] for call in notice_calls]
 
         email_notice = json.loads(next(call for call in notice_calls if call["path"] == "/emails")["body"])
         whatsapp_notice = json.loads(
             next(call for call in notice_calls if call["path"] == "/123456789/messages")["body"]
+        )
+        sms_notice = json.loads(
+            next(call for call in notice_calls if call["path"] == "/api/sms/send")["body"]
         )
         assert "Voter ID SJC/AL/" in email_notice["subject"], email_notice["subject"]
         assert "Your Voter ID is SJC/AL/" in email_notice["text"], email_notice["text"]
@@ -221,7 +232,13 @@ def main() -> None:
         wa_params = whatsapp_notice["template"]["components"][0]["parameters"]
         assert len(wa_params) == 3, wa_params
         assert all(item["type"] == "text" and item["text"] for item in wa_params)
-        ok("approval emails the member's Voter ID and sends the WhatsApp utility notice")
+        assert "Voter ID SJC/AL/" in sms_notice["sms"], sms_notice["sms"]
+        assert "accredit" in sms_notice["sms"], sms_notice["sms"]
+        assert len(sms_notice["sms"]) <= 160, len(sms_notice["sms"])
+        ok(
+            "approval sends the Voter ID by email, SMS and the WhatsApp utility notice; "
+            "SMS stays within one part"
+        )
 
         with SessionLocal() as db:
             rows = db.execute(
@@ -230,13 +247,14 @@ def main() -> None:
                     NotificationDelivery.purpose == "registration",
                 )
             ).scalars().all()
-            assert len(rows) == 2 * eligible - 1
-            assert {row.channel for row in rows} == {"email", "whatsapp"}
+            assert len(rows) == 3 * eligible - 1
+            assert {row.channel for row in rows} == {"email", "sms", "whatsapp"}
             assert all(row.status == "sent" and row.challenge_id is None for row in rows)
             assert db.scalar(
                 select(func.count(Voter.id)).where(
                     Voter.election_id == election_id,
                     Voter.registration_email_sent_at.is_not(None),
+                    Voter.registration_sms_sent_at.is_not(None),
                     Voter.registration_whatsapp_sent_at.is_not(None),
                 )
             ) == eligible - 1
@@ -249,6 +267,7 @@ def main() -> None:
         again_notice = again.json()["notifications"]
         assert len(CAPTURED) == again_start
         assert again_notice["email_already_sent"] == eligible, again_notice
+        assert again_notice["sms_already_sent"] == eligible, again_notice
         assert again_notice["whatsapp_already_sent"] == eligible - 1, again_notice
         assert again_notice["whatsapp_no_consent"] == 1, again_notice
         ok("repeated register approval does not resend successful notices")
@@ -277,6 +296,10 @@ def main() -> None:
         assert "otp" not in readiness
         assert readiness["whatsapp"]["registration_template_name"] == "sjc_registration_confirmation"
         assert readiness["whatsapp"]["vote_confirmation_template_name"] == "sjc_vote_confirmation"
+        assert readiness["whatsapp"]["results_template_name"] == "sjc_results_declared"
+        assert next(
+            provider for provider in readiness["providers"] if provider["channel"] == "sms"
+        )["configured"] is True
         assert all(
             provider["configured"]
             for provider in readiness["providers"]
@@ -289,10 +312,11 @@ def main() -> None:
         )
         assert overview.status_code == 200, overview.text
         delivery_stats = overview.json()["live"]["registration_delivery"]
-        assert delivery_stats["sent"] >= 2 * eligible - 1
+        assert delivery_stats["sent"] >= 3 * eligible - 1
         assert delivery_stats["failed"] == 0
         assert {row["channel"] for row in delivery_stats["by_channel"]} >= {
             "email",
+            "sms",
             "whatsapp",
         }
         assert overview.json()["live"]["failed_identity_checks"] >= 1
@@ -348,12 +372,15 @@ def main() -> None:
         )
         assert cast.status_code == 200, cast.text
         cast_calls = CAPTURED[cast_start:]
-        assert len(cast_calls) == 2, [call["path"] for call in cast_calls]
+        assert len(cast_calls) == 3, [call["path"] for call in cast_calls]
         vote_email = json.loads(
             next(call for call in cast_calls if call["path"] == "/emails")["body"]
         )
         vote_whatsapp = json.loads(
             next(call for call in cast_calls if call["path"] == "/123456789/messages")["body"]
+        )
+        vote_sms = json.loads(
+            next(call for call in cast_calls if call["path"] == "/api/sms/send")["body"]
         )
         assert "submitted successfully" in vote_email["subject"], vote_email["subject"]
         assert "submitted successfully" in vote_email["text"], vote_email["text"]
@@ -362,7 +389,13 @@ def main() -> None:
         wa_vote_params = vote_whatsapp["template"]["components"][0]["parameters"]
         assert len(wa_vote_params) == 3, wa_vote_params
         assert all(item["type"] == "text" and item["text"] for item in wa_vote_params)
-        ok("a cast sends email and WhatsApp submission confirmations without selections")
+        assert "ballot was received" in vote_sms["sms"], vote_sms["sms"]
+        assert "Amina" not in vote_sms["sms"], vote_sms["sms"]
+        assert len(vote_sms["sms"]) <= 160, len(vote_sms["sms"])
+        ok(
+            "a cast sends email, SMS and WhatsApp submission confirmations "
+            "without selections; SMS stays within one part"
+        )
 
         with SessionLocal() as db:
             voted_voter = db.execute(
@@ -376,8 +409,8 @@ def main() -> None:
                     NotificationDelivery.purpose == "vote_confirmation",
                 )
             ).scalars().all()
-            assert len(confirmation_rows) == 2, confirmation_rows
-            assert {row.channel for row in confirmation_rows} == {"email", "whatsapp"}
+            assert len(confirmation_rows) == 3, confirmation_rows
+            assert {row.channel for row in confirmation_rows} == {"email", "sms", "whatsapp"}
             assert all(row.status == "sent" and row.challenge_id is None for row in confirmation_rows)
         ok("vote confirmation deliveries are recorded separately per channel")
 

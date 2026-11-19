@@ -3,7 +3,16 @@
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Alert, Card, Loading, SectionHeading, Stat } from "@/components/ui";
-import { API_BASE, api, can, downloadWithAuth, formatDate, getProfile, shortHash } from "@/lib/api";
+import {
+  API_BASE,
+  api,
+  can,
+  downloadWithAuth,
+  formatDate,
+  getProfile,
+  notifyElectionUpdated,
+  shortHash,
+} from "@/lib/api";
 
 export default function ResultsAdminPage() {
   const params = useParams<{ id: string }>();
@@ -33,6 +42,7 @@ export default function ResultsAdminPage() {
         body: JSON.stringify({ comments: "Provisional figures reviewed and reconciled" }),
       });
       setNotice("Provisional results submitted to the Chairman for approval.");
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);
@@ -51,12 +61,18 @@ export default function ResultsAdminPage() {
       const delivered = declaration?.voter_notifications;
       const emails =
         delivered && typeof delivered.email_sent === "number"
-          ? ` Voter result emails: ${delivered.email_sent} sent, ${delivered.email_failed} failed, ${delivered.email_unavailable} unavailable.`
+          ? ` Voter result notices — Email: ${delivered.email_sent} sent, ${delivered.email_failed} failed,` +
+            ` ${delivered.email_unavailable} unavailable.` +
+            ` SMS: ${delivered.sms_sent ?? 0} sent, ${delivered.sms_failed ?? 0} failed,` +
+            ` ${delivered.sms_unavailable ?? 0} unavailable.` +
+            ` WhatsApp: ${delivered.whatsapp_sent ?? 0} sent, ${delivered.whatsapp_failed ?? 0} failed,` +
+            ` ${(delivered.whatsapp_unavailable ?? 0) + (delivered.whatsapp_no_consent ?? 0)} unavailable.`
           : "";
       const solo = declaration?.single_official_declaration
         ? " Recorded as a single-official declaration: the same account submitted and declared."
         : "";
       setNotice(`Official results declared (version ${declaration.version}) and digitally signed.${solo}${emails}`);
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);
@@ -78,6 +94,7 @@ export default function ResultsAdminPage() {
       });
       setNotice(`Correction declared as version ${declaration.version}; earlier versions preserved.`);
       setReason("");
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);

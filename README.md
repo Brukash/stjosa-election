@@ -101,20 +101,23 @@ Password for all seeded accounts: `ChangeMe!2026` (override with `SEED_DEFAULT_P
 | Election Observer | `observer@sjcjos-alumni.org` |
 
 Demo Voter IDs: `SJC/AL/2004/001` … `SJC/AL/2015/024`. Accreditation checks the Voter ID directly
-against the approved register; no OTP is involved. Registration notices are sent by email and
+against the approved register; no OTP is involved. Registration notices are sent by email, SMS and
 WhatsApp when the register is approved.
 
-### 4. Registration notices (email and WhatsApp)
+### 4. Registration notices (email, SMS and WhatsApp)
 
 Accreditation is **Voter ID-only**. A voter enters the Voter ID from the approved register; if it
 matches, the system opens an accreditation session and the browser creates the anonymous credential.
 No OTP is generated or delivered during accreditation.
 
-When the Chairman approves the register, every eligible voter receives a registration notice:
+When the Chairman approves the register, every eligible voter receives a registration notice on
+every channel the register and committee allow:
 
 - **Email** includes the voter's full name, **Voter ID**, election title and a link to the
   accreditation page. The subject line also includes the Voter ID. An address on the register is
   required.
+- **SMS** carries the same notice summarised into a single 160-character part: the election
+  reference, the **Voter ID** and the accreditation link. A valid mobile number is required.
 - **WhatsApp** uses the separate approved **Utility** template `sjc_registration_confirmation` with
   three body parameters: `{{1}}` voter name, `{{2}}` election title and `{{3}}` Voter ID. Recorded
   `whatsapp_consent` is required. The OTP authentication template is not used.
@@ -123,27 +126,38 @@ When the Chairman approves the register, every eligible voter receives a registr
 | --- | --- | --- |
 | Email | Resend | `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM` (verified domain) |
 | Email | cPanel / any authenticated SMTP relay | `EMAIL_PROVIDER=smtp`, `EMAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_SSL=true` (465) or `SMTP_STARTTLS=true` (587), optional `SMTP_MAX_CONNECTIONS` |
+| SMS | Termii (Nigeria) | `SMS_PROVIDER=termii`, `TERMII_API_KEY`, `TERMII_SENDER_ID`, optional `TERMII_CHANNEL` (default `dnd`) |
+| SMS | Twilio (legacy fallback) | `SMS_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
 | WhatsApp registration notices | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_REGISTRATION_TEMPLATE_NAME`, `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE` |
 | WhatsApp vote confirmations | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME`, `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE` |
+| WhatsApp declared results | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_RESULTS_TEMPLATE_NAME`, `WHATSAPP_RESULTS_TEMPLATE_LANGUAGE` |
 | WhatsApp status webhook | Meta | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` |
 
 Successful channels are timestamped on the voter (`registration_email_sent_at`,
-`registration_whatsapp_sent_at`). Approving the register again retries only channels that have not
-succeeded, so repeated approval does not spam members. Approval is committed before notifications,
-and a provider failure never cancels the approval or the other channel. Delivery attempts are recorded
-in `notification_deliveries` with `purpose="registration"`; message contents and full contacts are not
-stored.
+`registration_sms_sent_at`, `registration_whatsapp_sent_at`). Approving the register again retries only
+channels that have not succeeded, so repeated approval does not spam members. Approval is committed
+before notifications, and a provider failure never cancels the approval or the other channels.
+Delivery attempts are recorded in `notification_deliveries` with `purpose="registration"`; message
+contents and full contacts are not stored.
 
-After a ballot is accepted, the voter also receives a confirmation by email and, where recorded
-`whatsapp_consent` is present, by WhatsApp. The message says the ballot was received and submitted
-successfully, includes the election title and submission time, and never includes the voter's
-selections. Email is sent only when an address and provider are configured; WhatsApp uses the
+After a ballot is accepted, the voter also receives a confirmation by email, by SMS and, where
+recorded `whatsapp_consent` is present, by WhatsApp. Each message says the ballot was received and
+submitted successfully and never includes the voter's selections. Email carries the election title
+and submission time; SMS carries the same confirmation in one 160-character part; WhatsApp uses the
 separate approved **Utility** template `sjc_vote_confirmation` with `{{1}}` voter name, `{{2}}`
 election title and `{{3}}` submission time. Confirmation delivery is best effort: a provider failure
 never invalidates or fails the accepted vote, and it runs after the cast response has been sent so a
 slow provider cannot delay the voter. Idempotent cast retries do not resend messages. Delivery
 attempts are recorded with `purpose="vote_confirmation"`. Each confirmation provider attempt is
 limited by `VOTE_CONFIRMATION_TIMEOUT_SECONDS` (default 4 seconds) and is not retried.
+
+When the Chairman declares the official results, every approved voter is notified on all three
+channels. The email carries the full published figures for each position; SMS and WhatsApp carry a
+one-screen summary (the declaration and a link to the signed results page) because both are
+length-limited and would otherwise cost several parts. WhatsApp uses the approved **Utility**
+template `sjc_results_declared` with `{{1}}` voter name, `{{2}}` election title and `{{3}}` results
+link, and still requires recorded consent. Delivery attempts are recorded with
+`purpose="results_declared"`.
 
 Run the delivery and accreditation tests without real credentials:
 
@@ -167,8 +181,9 @@ second election through configuration approval by the Chairman alone. Run it aga
 ## Supabase deployment
 
 1. Create a Supabase project.
-2. Apply `supabase/migrations/0001_init.sql`, `0002_security.sql`, `0003_otp_channels.sql` and
-   `0004_registration_notifications.sql` (SQL editor or `supabase db push`).
+2. Apply every file in `supabase/migrations/` in numeric order (SQL editor or `supabase db push`).
+   `0007_registration_sms.sql` adds the registration SMS timestamp; the API also adds additive
+   columns defensively on startup.
 3. Set `DATABASE_URL` to the Supabase connection string (the backend rewrites `postgres://` /
    `postgresql://` to the `psycopg` driver).
 4. Set strong `SECRET_KEY`, `MASTER_KEY` and `SEED_DEFAULT_PASSWORD` values.
@@ -191,10 +206,11 @@ Detailed steps, backup/recovery and election-day procedures: `docs/OPERATIONS.md
 
 ### Known limitations (read before production)
 
-- Registration notices are implemented by email (Resend/SMTP) and WhatsApp (Meta utility template),
-  but must be configured with the committee's verified sender domain, approved WhatsApp template and
-  recorded voter consent, then tested for deliverability before a real election. No provider
-  credential is committed.
+- Notices are implemented by email (Resend/SMTP), SMS (Termii/Twilio) and WhatsApp (Meta utility
+templates), but must be configured with the committee's verified sender domain, approved sender ID,
+approved WhatsApp templates and recorded voter consent, then tested for deliverability before a real
+election. No provider credential is committed. SMS and WhatsApp are billed per message by the
+provider.
 - Accreditation is Voter ID-only. The Voter ID is sent by email and therefore acts as a bearer
   credential: it must be issued privately, and members must not forward their registration email.
 - The blind-signature construction is textbook RSA-FDH on a 2048-bit key. It must be reviewed by an

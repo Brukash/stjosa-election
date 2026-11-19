@@ -34,6 +34,8 @@ Frontend: `NEXT_PUBLIC_API_URL=https://api.elections.your-domain.org`.
      purpose tracking.
    - `supabase/migrations/0005_voter_turnout.sql` — private turnout marker for aggregate progress
      reporting.
+   - `supabase/migrations/0006_election_key_material.sql` — encrypted key archive on the election row.
+   - `supabase/migrations/0007_registration_sms.sql` — per-voter registration SMS timestamp.
 3. Confirm RLS is enabled on all sensitive tables (`Supabase → Database → Tables`).
 4. Create staff accounts through the application (or seed then change every password).
 5. Never expose the database connection string to the browser; the Next.js app talks only to FastAPI.
@@ -50,15 +52,24 @@ cd backend
 Accreditation is Voter ID-only: the voter enters the Voter ID from the approved register, and a match
 opens the credential flow. No OTP is generated or delivered.
 
-When the Chairman approves the register, the backend sends one registration notice by email and one
-by WhatsApp to each eligible voter. The email includes the voter's **Voter ID**, which is the identifier
-used for accreditation. Successful channels are recorded on the voter so a repeat approval only retries
-the missing channel. Approval commits before delivery; provider failures do not cancel the approval.
+Every notice the system emails is also sent by SMS and, with recorded consent, by WhatsApp. When the
+Chairman approves the register, the backend sends one registration notice per channel to each
+eligible voter. The email includes the voter's **Voter ID**, which is the identifier used for
+accreditation; the SMS repeats the reference, Voter ID and accreditation link in a single
+160-character part; WhatsApp uses an approved Utility template. Successful channels are recorded on
+the voter so a repeat approval only retries the missing channel. Approval commits before delivery;
+provider failures do not cancel the approval or the other channels.
 
 The additive migration `supabase/migrations/0003_otp_channels.sql` adds the voter WhatsApp consent
 column and remains part of the schema history. Registration notices use
 `supabase/migrations/0004_registration_notifications.sql` for per-channel sent timestamps and a
-`purpose` column on `notification_deliveries`; the API adds those columns defensively as well.
+`purpose` column on `notification_deliveries`, and `0007_registration_sms.sql` for the SMS
+timestamp; the API adds those columns defensively as well.
+
+Declared-result notices also go out on all three channels. Email carries the full published figures;
+SMS and WhatsApp carry a one-screen summary with a link to the signed declaration, because both are
+length-limited. Vote-submitted confirmations are likewise sent on all three channels and never
+contain the voter's selections.
 
 ### Email — cPanel SMTP (recommended for this election)
 
@@ -128,6 +139,43 @@ about 50, since the app records each voter's sent channel and only retries the m
 4. Send a test registration notice to a committee mailbox and confirm inbox placement.
 
 
+### SMS — Termii (recommended for Nigerian numbers)
+
+1. **Create the account.** Sign up at `termii.com`; the starter plan includes REST API access and a
+   sandbox for testing. Production SMS credits are purchased in the dashboard — confirm current
+   per-message pricing there before committing to a volume.
+2. **Copy the API key.** Termii dashboard → *API Token* / *Settings*. It is a server-side secret.
+3. **Request a sender ID.** Termii dashboard → *Rental → SMS Sender IDs → Make a new request*. Use
+   3–11 alphanumeric characters (for example `SJC-ALUMNI`) and wait for approval.
+4. **Enable the transactional (DND) route.** Nigerian DND numbers only receive OTP and election
+   notices on the `dnd` route, and Termii activates that route for an account through support. Ask
+   support to whitelist the sender ID for DND messaging. The default `TERMII_CHANNEL=dnd` already
+   selects it.
+5. **Set the Vercel environment variables** (Project → Settings → Environment Variables →
+   Production) and redeploy:
+
+   | Variable | Value |
+   | --- | --- |
+   | `SMS_PROVIDER` | `termii` |
+   | `TERMII_API_KEY` | API token from step 2 |
+   | `TERMII_SENDER_ID` | the approved sender ID, e.g. `SJC-ALUMNI` |
+   | `TERMII_CHANNEL` | `dnd` (default; keeps the message transactional) |
+
+6. **Verify before election day.** With the same variables in `backend/.env`:
+
+   ```bash
+   cd backend
+   .venv/Scripts/python.exe scripts/check_delivery.py --to-phone +2348012345678
+   ```
+
+   The report must say `sent <message id>`, and the Super Administrator's `/admin/delivery` page must
+   show `SMS` as `configured: true`. Twilio remains available with `SMS_PROVIDER=twilio` and its own
+   credentials, but its trial account only messages verified numbers.
+
+**Cost and volume.** SMS is billed per 160-character part. Registration, vote-confirmation and
+result messages are each written to fit in one part. 150 voters therefore costs at most 450 SMS
+parts across the three notices.
+
 ### WhatsApp — Meta WhatsApp Business Platform / Cloud API
 
 1. Create a Meta Business account, a WhatsApp Business Account and a system-user access token with
@@ -139,18 +187,52 @@ about 50, since the app records each voter's sent channel and only retries the m
    `en_US`) for the post-vote confirmation. Its body uses three parameters in this order: `{{1}}`
    voter full name, `{{2}}` election title and `{{3}}` submission time. It must say the ballot was
    received and submitted successfully and must not request or reveal selections.
-4. Set `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
+4. Create a third approved **Utility** template (for example `sjc_results_declared`, language
+   `en_US`) for the declared result. Its body uses three parameters in this order: `{{1}}` voter full
+   name, `{{2}}` election title and `{{3}}` results link. It should say the official results have
+   been declared and link to the signed declaration; the full figures stay on the results page.
+5. Set `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`,
    `WHATSAPP_REGISTRATION_TEMPLATE_NAME`, `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE`,
-   `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME` and `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE`.
+   `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME`, `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE`,
+   `WHATSAPP_RESULTS_TEMPLATE_NAME` and `WHATSAPP_RESULTS_TEMPLATE_LANGUAGE`.
    Keep the token in the server-side environment/secret store only.
-5. Record each voter's `whatsapp_consent` in the register CSV/import or via the register screen.
-   WhatsApp is reported as unavailable and skipped without consent; email still proceeds.
-6. Set `WHATSAPP_APP_SECRET` and `WHATSAPP_VERIFY_TOKEN`, then subscribe the Meta app to
+   Meta's development setup includes a free test number that can message a small list of verified
+   test recipients; production utility templates are billed per delivered message.
+6. Record each voter's `whatsapp_consent` in the register CSV/import or via the register screen.
+   WhatsApp is reported as unavailable and skipped without consent; email and SMS still proceed.
+7. Set `WHATSAPP_APP_SECRET` and `WHATSAPP_VERIFY_TOKEN`, then subscribe the Meta app to
    `https://<api-host>/api/webhooks/whatsapp`. Signed delivery/read/failure callbacks update
    `notification_deliveries`; message contents are not stored.
-7. Send a test registration and vote-confirmation template to a consented committee number and
-   confirm delivery before the election. The Super Administrator can inspect readiness at
+8. Send a test registration, vote-confirmation and results template to a consented committee number
+   and confirm delivery before the election. The Super Administrator can inspect readiness at
    `/admin/delivery`.
+
+#### Template copy to submit
+
+Parameter order is fixed by the application; the wording below matches what the code expects. Keep
+plain text (no formatting), and do not begin or end the body with a variable.
+
+`sjc_registration_confirmation` (Utility, `en_US`):
+
+```
+Hello {{1}}, you are registered to vote in {{2}}. Your Voter ID is {{3}}. Open the election portal to accredit and vote. Never share your Voter ID.
+```
+
+`sjc_vote_confirmation` (Utility, `en_US`):
+
+```
+Dear {{1}}, your ballot for {{2}} was received and submitted successfully at {{3}}. This message does not include your selections. If you did not submit this ballot, contact the Electoral Committee.
+```
+
+`sjc_results_declared` (Utility, `en_US`):
+
+```
+Dear {{1}}, the official results of {{2}} have been declared and published. View the signed declaration: {{3}}. This message does not record how any individual voted.
+```
+
+If Meta rejects the link inside the body, submit the same wording with a URL button instead and keep
+`{{3}}` as the button's dynamic suffix, then tell the maintainer so the payload builder can be
+adjusted to send a button component.
 
 ### Local WhatsApp registration-delivery test
 
@@ -165,6 +247,19 @@ cd backend
 WhatsApp opt-in. The command reads `WHATSAPP_*` from the environment or `backend/.env`, reuses the
 exact registration-notice payload, and prints only the template, masked recipient and provider
 message id. It opens no database session and sends one real billable message.
+
+The same script can exercise any of the three voter templates, which is the quickest way to prove
+that each approved template and its parameter order work before election day:
+
+```bash
+cd backend
+.venv/Scripts/python.exe scripts/check_delivery.py --to-whatsapp +2348012345678 --whatsapp-template registration
+.venv/Scripts/python.exe scripts/check_delivery.py --to-whatsapp +2348012345678 --whatsapp-template vote_confirmation
+.venv/Scripts/python.exe scripts/check_delivery.py --to-whatsapp +2348012345678 --whatsapp-template results
+```
+
+Each run sends exactly one real billable message and prints only the template, masked recipient and
+provider message id.
 
 ### Production guard and preflight
 

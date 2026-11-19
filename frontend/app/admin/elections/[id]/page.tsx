@@ -9,6 +9,7 @@ import {
   formatDate,
   fromDateTimeInput,
   getProfile,
+  notifyElectionUpdated,
   shortHash,
   toDateTimeInput,
 } from "@/lib/api";
@@ -92,6 +93,7 @@ export default function ElectionSetupPage() {
         }),
       });
       setNotice("Election details saved and configuration hash recomputed.");
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);
@@ -111,6 +113,7 @@ export default function ElectionSetupPage() {
         body: JSON.stringify(settings),
       });
       setNotice("Verification settings saved. Approve them below before opening accreditation.");
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);
@@ -124,6 +127,7 @@ export default function ElectionSetupPage() {
     try {
       await api(`/api/elections/${id}/verification-settings/approve`, { method: "POST", auth: true });
       setNotice("Verification settings approved. They are now locked in for this election.");
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);
@@ -140,6 +144,7 @@ export default function ElectionSetupPage() {
         auth: true,
       });
       setNotice(data.message);
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);
@@ -157,6 +162,7 @@ export default function ElectionSetupPage() {
         body: JSON.stringify({ status }),
       });
       setNotice(`Election status changed to ${status.replace(/_/g, " ")}.`);
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);
@@ -192,6 +198,7 @@ export default function ElectionSetupPage() {
     try {
       await api(`/api/elections/changes/${changeId}/approve`, { method: "POST", auth: true });
       setNotice("Change approved and applied with a new configuration hash.");
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);

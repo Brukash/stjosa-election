@@ -231,6 +231,8 @@ def provider_status() -> list[dict]:
                 "WHATSAPP_ACCESS_TOKEN",
                 "WHATSAPP_PHONE_NUMBER_ID",
                 "WHATSAPP_REGISTRATION_TEMPLATE_NAME",
+                "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME",
+                "WHATSAPP_RESULTS_TEMPLATE_NAME",
             ],
             "template": settings.whatsapp_registration_template_name,
             "template_language": settings.whatsapp_registration_template_language,
@@ -240,6 +242,9 @@ def provider_status() -> list[dict]:
             "vote_confirmation_template": settings.whatsapp_vote_confirmation_template_name,
             "vote_confirmation_template_language": settings.whatsapp_vote_confirmation_template_language,
             "vote_confirmation_configured": settings.whatsapp_vote_confirmation_configured,
+            "results_template": settings.whatsapp_results_template_name,
+            "results_template_language": settings.whatsapp_results_template_language,
+            "results_configured": settings.whatsapp_results_configured,
             "consent_required": True,
             "delivery_status_webhook": {
                 "url": f"{settings.api_origin}/api/webhooks/whatsapp",
@@ -439,12 +444,15 @@ def _send_smtp(
         return None, f"smtp delivery failed: {type(exc).__name__}"
 
 
-def _send_twilio(destination: str, body: str) -> tuple[str | None, str | None]:
+def _send_twilio(
+    destination: str, body: str, *, timeout_seconds: int | None = None
+) -> tuple[str | None, str | None]:
     sid = settings.twilio_account_sid
     credentials = base64.b64encode(f"{sid}:{settings.twilio_auth_token}".encode()).decode()
     url = f"{settings.sms_api_base}/2010-04-01/Accounts/{sid}/Messages.json"
     data = {"From": settings.twilio_from_number, "To": destination, "Body": body}
-    with httpx.Client(timeout=settings.otp_delivery_timeout_seconds) as client:
+    timeout = timeout_seconds or settings.otp_delivery_timeout_seconds
+    with httpx.Client(timeout=timeout) as client:
         response = _post_with_retry(
             client, url, data=data, headers={"Authorization": f"Basic {credentials}"}
         )
@@ -459,7 +467,9 @@ def _send_twilio(destination: str, body: str) -> tuple[str | None, str | None]:
         return None, "sms provider returned an invalid response"
 
 
-def _send_termii(destination: str, body: str) -> tuple[str | None, str | None]:
+def _send_termii(
+    destination: str, body: str, *, timeout_seconds: int | None = None
+) -> tuple[str | None, str | None]:
     """Send a transactional SMS through Termii.
 
     The DND route is used for OTPs; Termii's generic route is promotional and
@@ -474,7 +484,8 @@ def _send_termii(destination: str, body: str) -> tuple[str | None, str | None]:
         "channel": settings.termii_channel or "dnd",
     }
     url = f"{settings.termii_api_base}/api/sms/send"
-    with httpx.Client(timeout=settings.otp_delivery_timeout_seconds) as client:
+    timeout = timeout_seconds or settings.otp_delivery_timeout_seconds
+    with httpx.Client(timeout=timeout) as client:
         response = _post_with_retry(client, url, json=payload)
     if response.status_code >= 300:
         return None, f"sms provider rejected the message ({response.status_code})"
@@ -537,6 +548,19 @@ def _send_whatsapp(destination: str, otp: str) -> tuple[str | None, str | None]:
         return None, "whatsapp provider returned an invalid response"
 
 
+# ── sms ─────────────────────────────────────────────────────────────────────
+def _send_sms(
+    destination: str, body: str, *, timeout_seconds: int | None = None
+) -> tuple[str | None, str | None]:
+    """One entry point for SMS, whichever gateway is configured."""
+    provider = _sms_provider()
+    if provider == "termii":
+        return _send_termii(destination, body, timeout_seconds=timeout_seconds)
+    if provider == "twilio":
+        return _send_twilio(destination, body, timeout_seconds=timeout_seconds)
+    return None, "sms provider is not configured"
+
+
 # ── registration notices ─────────────────────────────────────────────────────
 def _registration_email_body(election: Election, voter: Voter) -> tuple[str, str, str]:
     link = f"{settings.app_origin.rstrip('/')}/accredit"
@@ -566,6 +590,37 @@ def _registration_email_body(election: Election, voter: Voter) -> tuple[str, str
 <tr><td style="background:#EEF4EC;padding:16px 26px;font-size:11px;color:#55635A">This message never asks for your ballot choices.</td></tr>
 </table></td></tr></table></body></html>"""
     return subject, text, html_body
+
+
+def _registration_sms_body(election: Election, voter: Voter) -> str:
+    """The registration summary in one 160-character SMS part.
+
+    SMS has no rich formatting and is billed per part, so this repeats only the
+    facts a member needs: they are registered, their Voter ID, and the one link
+    that opens accreditation.
+    """
+    link = f"{settings.app_origin.rstrip('/')}/accredit"
+    return (
+        f"SJC Alumni Election {election.reference}: registered. "
+        f"Voter ID {voter.voter_id}. Accredit: {link}"
+    )
+
+
+def _send_registration_sms(
+    voter: Voter, election: Election, destination: str
+) -> DeliveryResult:
+    try:
+        message_id, error = _send_sms(destination, _registration_sms_body(election, voter))
+    except Exception as exc:
+        message_id, error = None, f"sms delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="sms",
+        provider=_sms_provider() or "none",
+        status="failed" if error else "sent",
+        recipient_masked=mask_phone(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
 
 
 def _send_registration_email(voter: Voter, election: Election) -> DeliveryResult:
@@ -667,9 +722,11 @@ def notify_registered_voters(
 ) -> dict:
     """Send one registration notice per approved voter and channel.
 
-    Email and WhatsApp are tracked separately. A channel that already succeeded
-    is not sent again, while a failed or unavailable channel can be retried on
-    a later register approval. Notifications never block register approval.
+    Email, SMS and WhatsApp are tracked separately and carry the same facts;
+    the email is the long form and the SMS/WhatsApp messages are a one-screen
+    summary. A channel that already succeeded is not sent again, while a failed
+    or unavailable channel can be retried on a later register approval.
+    Notifications never block register approval.
     """
     summary = {
         "voters": 0,
@@ -677,6 +734,10 @@ def notify_registered_voters(
         "email_failed": 0,
         "email_unavailable": 0,
         "email_already_sent": 0,
+        "sms_sent": 0,
+        "sms_failed": 0,
+        "sms_unavailable": 0,
+        "sms_already_sent": 0,
         "whatsapp_sent": 0,
         "whatsapp_failed": 0,
         "whatsapp_unavailable": 0,
@@ -698,6 +759,13 @@ def notify_registered_voters(
             attempts.append(("email", voter, (voter.email or "").strip()))
 
         phone = _normalise_phone(voter.phone or "")
+        if voter.registration_sms_sent_at:
+            summary["sms_already_sent"] += 1
+        elif not phone or not settings.sms_configured:
+            summary["sms_unavailable"] += 1
+        else:
+            attempts.append(("sms", voter, phone))
+
         if voter.registration_whatsapp_sent_at:
             summary["whatsapp_already_sent"] += 1
         elif not voter.whatsapp_consent:
@@ -715,6 +783,11 @@ def notify_registered_voters(
         for channel, voter, destination in attempts:
             if channel == "email":
                 futures[executor.submit(_send_registration_email, voter, election)] = (channel, voter)
+            elif channel == "sms":
+                futures[executor.submit(_send_registration_sms, voter, election, destination)] = (
+                    channel,
+                    voter,
+                )
             else:
                 futures[executor.submit(_send_registration_whatsapp, voter, election, destination)] = (
                     channel, voter
@@ -734,6 +807,8 @@ def notify_registered_voters(
                 summary[f"{channel}_sent"] += 1
                 if channel == "email":
                     voter.registration_email_sent_at = now()
+                elif channel == "sms":
+                    voter.registration_sms_sent_at = now()
                 else:
                     voter.registration_whatsapp_sent_at = now()
             else:
@@ -910,6 +985,42 @@ def send_vote_confirmation_whatsapp(
     )
 
 
+def _vote_confirmation_sms_body(
+    *, election_reference: str, submitted_label: str
+) -> str:
+    """The submission confirmation in one SMS part, without ballot choices."""
+    return (
+        f"SJC {election_reference}: your ballot was received at {submitted_label}. "
+        f"Your vote is recorded."
+    )
+
+
+def send_vote_confirmation_sms(
+    *,
+    election_reference: str,
+    submitted_label: str,
+    destination: str,
+) -> DeliveryResult:
+    try:
+        message_id, error = _send_sms(
+            destination,
+            _vote_confirmation_sms_body(
+                election_reference=election_reference, submitted_label=submitted_label
+            ),
+            timeout_seconds=settings.vote_confirmation_timeout_seconds,
+        )
+    except Exception as exc:
+        message_id, error = None, f"sms delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="sms",
+        provider=_sms_provider() or "none",
+        status="failed" if error else "sent",
+        recipient_masked=mask_phone(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
+
+
 def notify_vote_submitted(
     db: Session,
     *,
@@ -918,16 +1029,19 @@ def notify_vote_submitted(
     submitted_at: datetime,
     request_ip: str | None = None,
 ) -> dict:
-    """Confirm an accepted ballot by email and WhatsApp without ballot choices.
+    """Confirm an accepted ballot by email, SMS and WhatsApp without choices.
 
     The ballot has already been committed when this runs. Delivery failure is
     recorded but never rolls back or invalidates the vote. WhatsApp requires a
-    recorded opt-in; email uses the address on the approved register.
+    recorded opt-in; email and SMS use the contacts on the approved register.
     """
     summary = {
         "email_sent": 0,
         "email_failed": 0,
         "email_unavailable": 0,
+        "sms_sent": 0,
+        "sms_failed": 0,
+        "sms_unavailable": 0,
         "whatsapp_sent": 0,
         "whatsapp_failed": 0,
         "whatsapp_unavailable": 0,
@@ -945,6 +1059,11 @@ def notify_vote_submitted(
         summary["email_unavailable"] += 1
     else:
         attempts.append(("email", email))
+
+    if not phone or not settings.sms_configured:
+        summary["sms_unavailable"] += 1
+    else:
+        attempts.append(("sms", phone))
 
     if not voter.whatsapp_consent:
         summary["whatsapp_no_consent"] += 1
@@ -969,6 +1088,15 @@ def notify_vote_submitted(
                         voter_name=voter_name,
                         voter_id=voter_id,
                         submitted_label=submitted_label,
+                    )
+                ] = channel
+            elif channel == "sms":
+                futures[
+                    executor.submit(
+                        send_vote_confirmation_sms,
+                        election_reference=election.reference,
+                        submitted_label=submitted_label,
+                        destination=destination,
                     )
                 ] = channel
             else:
@@ -1234,6 +1362,98 @@ def _send_results_email(
     )
 
 
+def _results_sms_body(election_reference: str, results_url: str) -> str:
+    """The declared-result summary in one SMS part.
+
+    The full figures are too long for SMS and would cost several parts, so the
+    summary states the fact and links to the signed, published declaration.
+    """
+    return (
+        f"SJC {election_reference}: official results declared. "
+        f"Signed declaration: {results_url}"
+    )
+
+
+def send_results_sms(
+    *, election_reference: str, results_url: str, destination: str
+) -> DeliveryResult:
+    try:
+        message_id, error = _send_sms(
+            destination,
+            _results_sms_body(election_reference, results_url),
+            timeout_seconds=settings.vote_confirmation_timeout_seconds,
+        )
+    except Exception as exc:
+        message_id, error = None, f"sms delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="sms",
+        provider=_sms_provider() or "none",
+        status="failed" if error else "sent",
+        recipient_masked=mask_phone(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
+
+
+def send_results_whatsapp(
+    *,
+    voter_name: str,
+    election_title: str,
+    results_url: str,
+    destination: str,
+) -> DeliveryResult:
+    """Send the approved results utility template through Meta Cloud API.
+
+    Parameters: {{1}} voter name, {{2}} election title, {{3}} results link. The
+    full figures stay on the published declaration page.
+    """
+    to = "".join(ch for ch in destination if ch.isdigit())
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": settings.whatsapp_results_template_name,
+            "language": {"code": settings.whatsapp_results_template_language},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": voter_name},
+                        {"type": "text", "text": election_title},
+                        {"type": "text", "text": results_url},
+                    ],
+                }
+            ],
+        },
+    }
+    url = f"{settings.whatsapp_api_base}/{settings.whatsapp_phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {settings.whatsapp_access_token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        with httpx.Client(timeout=settings.vote_confirmation_timeout_seconds) as client:
+            response = _post_with_retry(client, url, attempts=1, json=payload, headers=headers)
+        if response.status_code >= 300:
+            message_id, error = None, f"whatsapp provider rejected the message ({response.status_code})"
+        else:
+            messages = response.json().get("messages") or []
+            message_id = str(messages[0].get("id") or "") if messages else ""
+            error = None if message_id else "whatsapp provider did not confirm a message id"
+    except Exception as exc:
+        message_id, error = None, f"whatsapp delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="whatsapp",
+        provider="meta",
+        status="failed" if error else "sent",
+        recipient_masked=mask_phone(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
+
+
 def notify_results_declared(
     db: Session,
     *,
@@ -1243,8 +1463,10 @@ def notify_results_declared(
     version: int,
     request_ip: str | None = None,
 ) -> dict:
-    """Email the declared result to every approved voter after a declaration.
+    """Send the declared result to every approved voter on every channel.
 
+    The email carries the published figures; SMS and WhatsApp carry a one-screen
+    summary that links to the signed declaration, because both are length-limited.
     The declaration is already committed when this runs, so a slow or failing
     provider can never roll it back. Each voter receives an individual message
     (never a shared recipient list) containing only the official public figures.
@@ -1254,6 +1476,13 @@ def notify_results_declared(
         "email_sent": 0,
         "email_failed": 0,
         "email_unavailable": 0,
+        "sms_sent": 0,
+        "sms_failed": 0,
+        "sms_unavailable": 0,
+        "whatsapp_sent": 0,
+        "whatsapp_failed": 0,
+        "whatsapp_unavailable": 0,
+        "whatsapp_no_consent": 0,
     }
     voters = db.execute(
         select(Voter).where(
@@ -1263,50 +1492,86 @@ def notify_results_declared(
         ).order_by(Voter.full_name)
     ).scalars().all()
     summary["voters"] = len(voters)
-    if not settings.email_configured:
-        summary["email_unavailable"] = len(voters)
-        return summary
-
     lines = _result_lines(figures)
     totals = figures.get("totals") or {}
     declared_label = _vote_submitted_label(election, declared_at)
     results_url = f"{settings.app_origin.rstrip('/')}/results"
 
-    seen: set[str] = set()
-    attempts: list[tuple[Voter, str]] = []
+    seen_email: set[str] = set()
+    seen_phone: set[str] = set()
+    seen_whatsapp: set[str] = set()
+    attempts: list[tuple[str, Voter, str]] = []
     for voter in voters:
         email = (voter.email or "").strip()
-        if not email or email.lower() in seen:
+        if not email or not settings.email_configured or email.lower() in seen_email:
             summary["email_unavailable"] += 1
-            continue
-        seen.add(email.lower())
-        attempts.append((voter, email))
+        else:
+            seen_email.add(email.lower())
+            attempts.append(("email", voter, email))
+
+        phone = _normalise_phone(voter.phone or "")
+        if not phone or not settings.sms_configured or phone in seen_phone:
+            summary["sms_unavailable"] += 1
+        else:
+            seen_phone.add(phone)
+            attempts.append(("sms", voter, phone))
+
+        if not phone:
+            summary["whatsapp_unavailable"] += 1
+        elif not voter.whatsapp_consent:
+            summary["whatsapp_no_consent"] += 1
+        elif not settings.whatsapp_results_configured or phone in seen_whatsapp:
+            summary["whatsapp_unavailable"] += 1
+        else:
+            seen_whatsapp.add(phone)
+            attempts.append(("whatsapp", voter, phone))
 
     if not attempts:
         return summary
 
     with ThreadPoolExecutor(max_workers=min(8, len(attempts))) as executor:
-        futures = {
-            executor.submit(
-                _send_results_email,
-                email,
-                election_title=election.title,
-                election_reference=election.reference,
-                voter_name=voter.full_name,
-                declared_label=declared_label,
-                version=version,
-                results_url=results_url,
-                lines=lines,
-                totals=totals,
-            ): voter
-            for voter, email in attempts
-        }
-        for future, voter in futures.items():
+        futures: dict = {}
+        for channel, voter, destination in attempts:
+            if channel == "email":
+                futures[
+                    executor.submit(
+                        _send_results_email,
+                        destination,
+                        election_title=election.title,
+                        election_reference=election.reference,
+                        voter_name=voter.full_name,
+                        declared_label=declared_label,
+                        version=version,
+                        results_url=results_url,
+                        lines=lines,
+                        totals=totals,
+                    )
+                ] = (channel, voter)
+            elif channel == "sms":
+                futures[
+                    executor.submit(
+                        send_results_sms,
+                        election_reference=election.reference,
+                        results_url=results_url,
+                        destination=destination,
+                    )
+                ] = (channel, voter)
+            else:
+                futures[
+                    executor.submit(
+                        send_results_whatsapp,
+                        voter_name=voter.full_name,
+                        election_title=election.title,
+                        results_url=results_url,
+                        destination=destination,
+                    )
+                ] = (channel, voter)
+        for future, (channel, voter) in futures.items():
             try:
                 result = future.result()
             except Exception as exc:
                 result = DeliveryResult(
-                    channel="email",
+                    channel=channel,
                     provider="unknown",
                     status="failed",
                     recipient_masked="***",

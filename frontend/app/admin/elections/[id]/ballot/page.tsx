@@ -3,7 +3,7 @@
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Alert, Card, Empty, Loading, SectionHeading } from "@/components/ui";
-import { api, can, getProfile } from "@/lib/api";
+import { api, can, getProfile, notifyElectionUpdated } from "@/lib/api";
 
 export default function BallotSetupPage() {
   const params = useParams<{ id: string }>();
@@ -45,6 +45,7 @@ export default function BallotSetupPage() {
         body: JSON.stringify({ ...position, seats: Number(position.seats) }),
       });
       setNotice(`Position "${position.title}" added.`);
+      notifyElectionUpdated();
       setPosition({ title: "", description: "", seats: 1 });
       load();
     } catch (err: any) {
@@ -68,6 +69,7 @@ export default function BallotSetupPage() {
         }),
       });
       setNotice(`Candidate "${candidate.full_name}" added.`);
+      notifyElectionUpdated();
       setCandidate({ ...candidate, full_name: "", bio: "", manifesto: "", photo_url: "" });
       load();
     } catch (err: any) {
@@ -82,6 +84,7 @@ export default function BallotSetupPage() {
     try {
       await api(`/api/elections/${kind}/${itemId}`, { method: "DELETE", auth: true });
       setNotice("Record removed and configuration hash recomputed.");
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);

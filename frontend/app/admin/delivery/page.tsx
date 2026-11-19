@@ -80,8 +80,9 @@ export default function DeliverySettingsPage() {
 
           <Card className="card-pad">
             <SectionHeading eyebrow="Controls" title="Registration notice delivery">
-              Registration notices are sent when the Chairman approves the register. Email requires an
-              address; WhatsApp requires a consented mobile number and the approved utility template.
+              Every notice is sent by email, SMS and WhatsApp. Email requires an address; SMS requires
+              a mobile number; WhatsApp also requires recorded consent and the approved utility
+              template.
             </SectionHeading>
             <dl className="space-y-1">
               <div className="kv">
@@ -95,6 +96,10 @@ export default function DeliverySettingsPage() {
               <div className="kv">
                 <dt>Registration template</dt>
                 <dd className="font-mono text-xs">{data.whatsapp.registration_template_name}</dd>
+              </div>
+              <div className="kv">
+                <dt>Results template</dt>
+                <dd className="font-mono text-xs">{data.whatsapp.results_template_name}</dd>
               </div>
               <div className="kv">
                 <dt>Webhook signature</dt>

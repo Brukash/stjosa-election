@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Alert, Card, Loading, SectionHeading, Stat } from "@/components/ui";
-import { api, can, formatDate, getProfile, shortHash } from "@/lib/api";
+import { api, can, formatDate, getProfile, notifyElectionUpdated, shortHash } from "@/lib/api";
 
 export default function CountingPage() {
   const params = useParams<{ id: string }>();
@@ -65,6 +65,7 @@ export default function CountingPage() {
     try {
       await api(`/api/tally/${id}/run`, { method: "POST", auth: true });
       setNotice("Automated count completed. Provisional results are ready for review.");
+      notifyElectionUpdated();
       load();
     } catch (err: any) {
       setError(err.message);
@@ -161,11 +162,12 @@ export default function CountingPage() {
             onClick={authorise}
             disabled={
               busy ||
+              data.authorised ||
               !can(profile, "counting.authorise") ||
               !["voting_closed", "provisional_results"].includes(data.status)
             }
           >
-            Authorise counting
+            {data.authorised ? "Counting authorised" : "Authorise counting"}
           </button>
           {can(profile, "counting.run") ? (
             <button

@@ -60,6 +60,7 @@ def _ensure_compatibility_columns() -> None:
     _ensure_column("voters", "whatsapp_consent", "BOOLEAN NOT NULL DEFAULT FALSE",
                    "BOOLEAN NOT NULL DEFAULT FALSE")
     _ensure_column("voters", "registration_email_sent_at", "TIMESTAMPTZ", "DATETIME")
+    _ensure_column("voters", "registration_sms_sent_at", "TIMESTAMPTZ", "DATETIME")
     _ensure_column("voters", "registration_whatsapp_sent_at", "TIMESTAMPTZ", "DATETIME")
     _ensure_column("voters", "turnout_token_hash", "VARCHAR(128)", "VARCHAR(128)")
     _ensure_column("voters", "has_voted_at", "TIMESTAMPTZ", "DATETIME")
