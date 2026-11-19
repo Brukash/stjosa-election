@@ -110,7 +110,7 @@ export default function ElectionSetupPage() {
         auth: true,
         body: JSON.stringify(settings),
       });
-      setNotice("Verification settings saved. A different authorised official must approve them before voting can open.");
+      setNotice("Verification settings saved. Approve them below before opening accreditation.");
       load();
     } catch (err: any) {
       setError(err.message);
@@ -208,9 +208,11 @@ export default function ElectionSetupPage() {
   const myRoles = new Set<string>(profile?.roles ?? []);
   const canEdit = can(profile, "election.edit");
   const canConfigure = can(profile, "verification.configure");
-  const canApproveSettings =
-    can(profile, "verification.approve") &&
-    election.verification.configured_by !== profile?.id;
+  // The committee retired the two-person rule on 2026-11-18: the presiding
+  // official may approve settings they saved themselves (the backend records it
+  // as `self_approved`). Saving settings clears the approval, so without this
+  // the Chairman would be left with no way to unlock accreditation.
+  const canApproveSettings = can(profile, "verification.approve");
   const myApprovalRole = myRoles.has("chairman")
     ? "chairman"
     : myRoles.has("returning_officer")
@@ -404,7 +406,11 @@ export default function ElectionSetupPage() {
                 </p>
               ) : null}
               {election.status === "approved" ? (
-                <p className="text-xs text-ink/45">Open accreditation when the register is approved.</p>
+                <p className="text-xs text-ink/45">
+                  {election.verification.approved_at
+                    ? "Open accreditation when the register is approved."
+                    : "Approve the verification settings below before opening accreditation."}
+                </p>
               ) : null}
             </div>
           </Card>
@@ -462,7 +468,7 @@ export default function ElectionSetupPage() {
           <span className="text-[11px] text-ink/40">
             {election.verification.approved_at
               ? `Approved ${formatDate(election.verification.approved_at)}`
-              : "Awaiting approval by a second official"}
+              : "Awaiting approval. The Chairman, or a Returning Officer acting in his place, approves these settings."}
           </span>
         </div>
       </Card>
