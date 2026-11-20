@@ -121,12 +121,11 @@ def main() -> None:
 
     headers = {
         "chairman": login("chairman@sjcjos-alumni.org"),
-        "returning": login("returning@sjcjos-alumni.org"),
         "observer": login("observer@sjcjos-alumni.org"),
         "accreditation": login("accreditation@sjcjos-alumni.org"),
         "super": login("superadmin@sjcjos-alumni.org"),
     }
-    ok("all five staff roles authenticate")
+    ok("all four staff roles authenticate")
 
     # ── 1. cast-as-intended challenge, then a fresh cast ballot ──────────────
     voter_a = "SJC/AL/2004/001"
@@ -201,10 +200,10 @@ def main() -> None:
 
     # ── 4. close voting and publish commitments ──────────────────────────────
     call("POST", f"/elections/{election['id']}/status", json={"status": "voting_closed"},
-         headers=headers["returning"])
+         headers=headers["chairman"])
     batches = call("GET", f"/commitments/{election['id']}")
     if not batches["batches"]:
-        published = call("POST", f"/commitments/{election['id']}/publish", headers=headers["returning"])
+        published = call("POST", f"/commitments/{election['id']}/publish", headers=headers["chairman"])
         assert published["published"]
     batches = call("GET", f"/commitments/{election['id']}")
     assert batches["batches"] and batches["batches"][0]["signature_verified"]
@@ -230,7 +229,7 @@ def main() -> None:
     ok("voter verification shows Merkle inclusion and inclusion in the count")
 
     # ── 6. results declaration ──────────────────────────────────────────────
-    call("POST", f"/results/{election['id']}/submit", headers=headers["returning"],
+    call("POST", f"/results/{election['id']}/submit", headers=headers["chairman"],
          json={"comments": "Provisional figures reconciled"})
     declared = call("POST", f"/results/{election['id']}/approve", headers=headers["chairman"])
     assert declared["signature_valid"] and declared["version"] == 1
@@ -280,14 +279,14 @@ def main() -> None:
     superadmin = login("superadmin@sjcjos-alumni.org")
     headers["superadmin"] = superadmin
     catalogue = call("GET", "/accounts/roles", headers=superadmin)
-    assert len(catalogue["roles"]) == 5
+    assert len(catalogue["roles"]) == 4
     assert {role["key"] for role in catalogue["roles"]} == {
-        "super_admin", "chairman", "accreditation_officer", "returning_officer", "observer"
+        "super_admin", "chairman", "accreditation_officer", "observer"
     }
-    ok("role catalogue defines all five offices")
+    ok("role catalogue defines all four offices")
 
     accounts = call("GET", "/accounts", headers=superadmin)
-    assert len(accounts["accounts"]) >= 5
+    assert len(accounts["accounts"]) >= 4
     created = call("POST", "/accounts", expected=201, headers=superadmin, json={
         "email": "pilot.observer@sjcjos-alumni.org",
         "full_name": "Pilot Observer",
@@ -320,16 +319,14 @@ def main() -> None:
 
     assert status(f"/register/{election['id']}", "chairman") == 200
     assert status(f"/register/{election['id']}", "accreditation") == 200
-    for who in ("superadmin", "returning", "observer"):
+    for who in ("superadmin", "observer"):
         assert status(f"/register/{election['id']}", who) == 403, who
 
     assert status(f"/tally/{election['id']}", "chairman") == 200
-    assert status(f"/tally/{election['id']}", "returning") == 200
     for who in ("superadmin", "accreditation", "observer"):
         assert status(f"/tally/{election['id']}", who) == 403, who
 
     assert status(f"/results/{election['id']}", "chairman") == 200
-    assert status(f"/results/{election['id']}", "returning") == 200
     assert status(f"/results/{election['id']}", "observer") == 200
     for who in ("superadmin", "accreditation"):
         assert status(f"/results/{election['id']}", who) == 403, who
@@ -350,7 +347,7 @@ def main() -> None:
     full_logs = call("GET", f"/monitoring/{election['id']}/audit-logs?limit=200",
                      headers=headers["observer"])
     assert any(log["action"] not in limited_actions for log in full_logs["logs"])
-    ok("read boundaries enforced across all five roles")
+    ok("read boundaries enforced across all four roles")
 
     print("\n" + "=" * 66)
     print(f"MOCK ELECTION PASSED: {len(PASSED)} checks")

@@ -104,10 +104,10 @@ the AES-GCM ciphertext decrypts to those selections and that both commitments ma
 | PATCH/DELETE | `/elections/candidates/{id}` | `election.edit` |
 | PUT | `/elections/{id}/verification-settings` | `verification.configure` |
 | POST | `/elections/{id}/verification-settings/approve` | `verification.approve` (the presiding official may approve settings they saved; recorded as `self_approved`) |
-| POST | `/elections/{id}/configuration/approve` | Chairman or Returning Officer; one approval completes it and provisions keys |
+| POST | `/elections/{id}/configuration/approve` | Chairman; the approval completes it and provisions keys |
 | POST | `/elections/{id}/status` | role-checked lifecycle transition |
 | POST | `/elections/{id}/changes` | `verification.approve` + reason (exceptional change) |
-| POST | `/elections/changes/{change_id}/approve` | Chairman or Returning Officer; a Chairman's confirmation applies the change, two approvals also apply it |
+| POST | `/elections/changes/{change_id}/approve` | Chairman; the confirmation applies the change |
 
 Frozen configuration returns `409` with an explanation. Lifecycle transitions allowed by the API:
 `draft → configured`, `configured → approved` (via recorded configuration approval), `approved →
@@ -131,7 +131,7 @@ accreditation_open`, `accreditation_open → voting_open`, `voting_open → voti
 
 | Method | Path | Permission |
 | --- | --- | --- |
-| POST | `/tally/{id}/authorise` | `counting.authorise` (Chairman or Returning Officer) |
+| POST | `/tally/{id}/authorise` | `counting.authorise` (Chairman) |
 | POST | `/tally/{id}/run` | `counting.run` + an authorisation on record |
 | GET | `/tally/{id}` | `tally.view` |
 | GET | `/tally/{id}/runs`, `/proofs` | `tally.view` |

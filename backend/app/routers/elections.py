@@ -53,7 +53,6 @@ from ..services import (
 router = APIRouter(prefix="/elections", tags=["elections"])
 
 CHAIRMAN_APPROVAL = "chairman"
-SECOND_APPROVAL_ROLE = "returning_officer"
 
 
 def _ensure_editable(db: Session, election: Election) -> None:
@@ -445,12 +444,12 @@ def approve_configuration(
     roles = roles_for(db, profile.id)
     settings_row = get_settings_row(db, election.id)
 
-    if "chairman" in roles:
-        role_key = "chairman"
-    elif "returning_officer" in roles:
-        role_key = "returning_officer"
-    else:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Chairman or Returning Officer may approve configuration")
+    if CHAIRMAN_APPROVAL not in roles:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the Electoral Committee Chairman may approve configuration",
+        )
+    role_key = CHAIRMAN_APPROVAL
 
     if election.status not in {"draft", "configured", "approved"}:
         raise HTTPException(status.HTTP_409_CONFLICT, "Configuration approval is closed")
@@ -533,7 +532,7 @@ def approve_configuration(
 STATUS_ROLES = {
     "accreditation_open": {"chairman"},
     "voting_open": {"chairman"},
-    "voting_closed": {"chairman", "returning_officer"},
+    "voting_closed": {"chairman"},
     "archived": {"chairman"},
     "approved": {"chairman"},
     "configured": {"chairman"},
@@ -666,8 +665,7 @@ def request_exceptional_change(
             status.HTTP_400_BAD_REQUEST,
             f"These settings cannot be changed after voting starts: {', '.join(sorted(unknown))}",
         )
-    roles = roles_for(db, profile.id)
-    requester_role = CHAIRMAN_APPROVAL if CHAIRMAN_APPROVAL in roles else SECOND_APPROVAL_ROLE
+    requester_role = CHAIRMAN_APPROVAL
     change = ConfigurationChange(
         election_id=election.id,
         changed_fields=payload.changes,
@@ -707,43 +705,36 @@ def approve_exceptional_change(
     if change.status != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, "Change request is not pending")
     roles = roles_for(db, profile.id)
-    if SECOND_APPROVAL_ROLE in roles:
-        role_key = SECOND_APPROVAL_ROLE
-    elif CHAIRMAN_APPROVAL in roles:
-        role_key = CHAIRMAN_APPROVAL
-    else:
+    if CHAIRMAN_APPROVAL not in roles:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Only the Chairman or Returning Officer may approve an exceptional change",
+            "Only the Electoral Committee Chairman may approve an exceptional change",
         )
+    role_key = CHAIRMAN_APPROVAL
     election = get_election(db, change.election_id)
     approvals = [dict(a) for a in change.approvals]
     own_entry = next((a for a in approvals if a["profile_id"] == profile.id), None)
-    if own_entry is not None and role_key != CHAIRMAN_APPROVAL:
-        raise HTTPException(status.HTTP_409_CONFLICT, "You have already approved this change")
     if own_entry is not None:
         # The Chairman requested it and is now confirming it: that confirmation
-        # is what applies the change, so a single official can still repair a
-        # locked configuration.
+        # is what applies the change, so one official can still repair a locked
+        # configuration.
         own_entry["confirmed_at"] = now().isoformat()
     else:
         approvals.append({"profile_id": profile.id, "role": role_key, "at": now().isoformat()})
     change.approvals = approvals
-    # One presiding official completes the change; two approvals still apply when
-    # both offices are in use.
-    if role_key == CHAIRMAN_APPROVAL or len(approvals) >= 2:
-        for key, value in change.changed_fields.items():
-            if key in CHANGEABLE_FIELDS:
-                setattr(election, key, _change_value(key, value))
-        change.status = "approved"
-        change.effective_at = change.effective_at or now()
-        change.new_hash = configuration_hash(db, election)
-        election.configuration_hash = change.new_hash
-        db.add(ElectionEvent(
-            election_id=election.id, event_type="configuration.changed",
-            message=f"Exceptional configuration change approved. Reason: {change.reason[:180]}",
-            actor_id=profile.id,
-        ))
+    # The Chairman's confirmation applies the change; no second office exists.
+    for key, value in change.changed_fields.items():
+        if key in CHANGEABLE_FIELDS:
+            setattr(election, key, _change_value(key, value))
+    change.status = "approved"
+    change.effective_at = change.effective_at or now()
+    change.new_hash = configuration_hash(db, election)
+    election.configuration_hash = change.new_hash
+    db.add(ElectionEvent(
+        election_id=election.id, event_type="configuration.changed",
+        message=f"Exceptional configuration change approved. Reason: {change.reason[:180]}",
+        actor_id=profile.id,
+    ))
     record_audit(db, action="configuration.change_approved", election_id=election.id,
                  actor_id=profile.id, entity="configuration_change", entity_id=change.id,
                  ip_address=client_ip(request), detail={"approvals": len(approvals)})

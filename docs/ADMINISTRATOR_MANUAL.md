@@ -52,7 +52,7 @@ rules, positions, candidates and verification settings.
 
 1. **Open accreditation** (Chairman): voters can now verify their Voter ID and receive credentials.
 2. **Open voting** (Chairman): the ballot becomes available.
-3. **Close voting** can be performed by the Chairman or Returning Officer; voting also closes
+3. **Close voting** is performed by the Chairman; voting also closes
    automatically at the configured closing time.
 
 Verification settings are saved and approved by the Chairman (one official may do both; the approval

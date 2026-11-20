@@ -90,7 +90,7 @@ coercion and vote-buying risk.
 | Control | Implementation |
 | --- | --- |
 | No admin can see selections | Ballot tables have no voter FK; decryption requires the tally key, held encrypted with the election and used only by the counting service |
-| Results need two stages of official sign-off | Returning Officer submits, Chairman approves; `result_approvals` records both. The Chairman may complete both stages (single-official path), which is recorded in the approval comments, audit log and election events |
+| Results are submitted, approved and declared by a recorded official | The Chairman submits the provisional figures, approves them and declares the result; `result_approvals` records both stages, and the approval comments, audit log (`single_official: true`) and election events state that one official did both |
 | Configuration approval is an explicit, recorded act | The presiding official's approval, the key bundle, the configuration hash and the status change are written in one transaction and audited. Single-official conduct is the committee's rule (2026-11-18); it is a deliberate trade-off against the earlier two-person requirement |
 | Super Admin restrictions | Permission matrix excludes approval, verification configuration, counting and declaration |
 | Verification freeze | `elections.locked_at` + `election_verification_settings.locked_at` set atomically on first accepted ballot; settings endpoints reject updates |
@@ -182,7 +182,7 @@ configuration 409, and no ballot table row contains a voter identifier.
    tokens and short session lifetimes with refresh.
 7. **MFA enrolment** is available at `/admin/security` and enforced for any account that enrols; it is
    not yet mandatory by role. Enrol every official before the election and consider enforcing it for
-   Chairman and Returning Officer.
+   Chairman.
 8. **DoS / edge rate limiting** is database-level per voter only; add WAF/edge limits.
 
 ## 6. Acceptance criteria status

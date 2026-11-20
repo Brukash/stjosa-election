@@ -29,7 +29,6 @@ DEMO_ACCOUNTS = [
     ("superadmin@sjcjos-alumni.org", "Amina Danladi", "super_admin"),
     ("chairman@sjcjos-alumni.org", "Hon. Emmanuel Pam", "chairman"),
     ("accreditation@sjcjos-alumni.org", "Mrs. Grace Gyang", "accreditation_officer"),
-    ("returning@sjcjos-alumni.org", "Dr. Samuel Audu", "returning_officer"),
     ("observer@sjcjos-alumni.org", "Barr. Halima Sani", "observer"),
 ]
 
@@ -176,7 +175,7 @@ def seed_database(db: Session) -> dict:
         public_commitment_list_enabled=True,
         pdf_receipt_enabled=True,
         configured_by=accounts["chairman"].id,
-        approved_by=accounts["returning_officer"].id,
+        approved_by=accounts["chairman"].id,
         approved_at=now,
     )
     db.add(settings_row)
@@ -222,18 +221,16 @@ def seed_database(db: Session) -> dict:
     election.key_material = keys["key_material"]
     election.credential_public_key = json.dumps(crypto.credential_public_numbers())
 
-    for role_key, profile in (("chairman", accounts["chairman"]),
-                              ("returning_officer", accounts["returning_officer"])):
-        db.add(ElectionConfigurationApproval(
-            election_id=election.id,
-            settings_hash=election.configuration_hash,
-            approver_id=profile.id,
-            approver_role=role_key,
-            approval_status="approved",
-            note="Bootstrap configuration approval",
-        ))
+    db.add(ElectionConfigurationApproval(
+        election_id=election.id,
+        settings_hash=election.configuration_hash,
+        approver_id=accounts["chairman"].id,
+        approver_role="chairman",
+        approval_status="approved",
+        note="Bootstrap configuration approval",
+    ))
     for state, message in (
-        ("configuration.approved", "Two-person configuration approval recorded"),
+        ("configuration.approved", "Configuration approved by the Chairman"),
         ("status.changed", "Election opened for accreditation"),
         ("status.changed", "Voting opened"),
     ):

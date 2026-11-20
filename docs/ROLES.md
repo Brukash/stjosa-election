@@ -1,6 +1,6 @@
 # Staff roles and access control
 
-The system has five offices. A person may hold more than one role, and effective permissions are the
+The system has four offices. A person may hold more than one role, and effective permissions are the
 union of their roles. Roles are global (not per-election); every API call re-checks the caller's
 current roles, so a change takes effect immediately.
 
@@ -37,19 +37,6 @@ Can:
 Cannot:
 - Manage staff accounts.
 
-### Returning Officer — `returning_officer`
-**Duty:** optional second official. On 2026-11-18 the committee retired the two-person rule and
-asked the Chairman to conduct the election from start to finish, so no step requires this office.
-
-Can:
-- Approve verification settings.
-- Authorise and run counting, in the Chairman's place.
-- Submit provisional results and publish the declared result.
-- Manage election lifecycle within its permitted transitions; view audit and commitments.
-
-Cannot:
-- Create or configure elections, approve the register, approve results, or manage accounts.
-
 ### Accreditation Officer — `accreditation_officer`
 **Duty:** voter roll and accreditation support.
 
@@ -76,28 +63,27 @@ Cannot:
 
 ## Enforcement summary
 
-| Capability | Super Admin | Chairman | Returning | Accreditation | Observer |
-| --- | :-: | :-: | :-: | :-: | :-: |
-| Manage staff accounts/roles | ✅ | — | — | — | — |
-| Create/configure election | create only | ✅ | — | — | — |
-| View voter register (identities) | — | ✅ | — | ✅ | — |
-| Import register | — | ✅ | — | ✅ | — |
-| Approve register | — | ✅ | — | — | — |
-| Configure verification | — | ✅ | — | — | — |
-| Approve verification | — | ✅ | ✅ | — | — |
-| Authorise counting | — | ✅ | ✅ | — | — |
-| Run counting | — | ✅ | ✅ | — | — |
-| Submit/publish results | — | ✅ | ✅ | — | — |
-| Approve/declare results | — | ✅ | — | — | — |
+| Capability | Super Admin | Chairman | Accreditation | Observer |
+| --- | :-: | :-: | :-: | :-: |
+| Manage staff accounts/roles | ✅ | — | — | — |
+| Create/configure election | create only | ✅ | — | — |
+| View voter register (identities) | — | ✅ | ✅ | — |
+| Import register | — | ✅ | ✅ | — |
+| Approve register | — | ✅ | — | — |
+| Configure verification | — | ✅ | — | — |
+| Approve verification | — | ✅ | — | — |
+| Authorise counting | — | ✅ | — | — |
+| Run counting | — | ✅ | — | — |
+| Submit/publish results | — | ✅ | — | — |
+| Approve/declare results | — | ✅ | — | — |
+| View tally and count proofs | — | ✅ | — | — |
+| View monitoring/audit | ✅ | ✅ | limited | ✅ |
+| Accreditation console / exceptions | — | view | ✅ | — |
+| Manage fields/accounts | accounts | all election | register | none |
 
-When no Returning Officer submission has been made, the Chairman can complete both the submission
-and the declaration in one session. Both `result_approvals` rows name the same account, and the
-comments, audit log detail (`single_official: true`) and election events state that one official
-did both.
-| View tally and count proofs | — | ✅ | ✅ | — | — |
-| View monitoring/audit | ✅ | ✅ | ✅ | limited | ✅ |
-| Accreditation console / exceptions | — | view | — | ✅ | — |
-| Manage fields/accounts | accounts | all election | lifecycle | register | none |
+The Chairman submits the provisional figures, approves them and declares the result in one session.
+Both `result_approvals` rows name the same account, and the comments, audit log detail
+(`single_official: true`) and election events state that one official did both.
 
 Two integrity rules apply regardless of role:
 
@@ -109,7 +95,7 @@ Two integrity rules apply regardless of role:
 Read boundaries are enforced with dedicated permissions, not just hidden menus:
 
 - `register.view` — voter identities: Chairman and Accreditation Officer only.
-- `tally.view` — tally runs and count proofs: Chairman and Returning Officer only.
+- `tally.view` — tally runs and count proofs: Chairman only.
 - `results.review` — full provisional/approval view; `results.review_restricted` (Observer) returns
   signed declarations only, with provisional counts and approval comments removed.
 - `audit.view_limited` — Accreditation Officer sees only Voter ID, credential and register audit events;
@@ -140,7 +126,6 @@ Password for all seeded accounts: `ChangeMe!2026` (override with `SEED_DEFAULT_P
 | --- | --- |
 | Super Administrator | `superadmin@sjcjos-alumni.org` |
 | Chairman | `chairman@sjcjos-alumni.org` |
-| Returning Officer | `returning@sjcjos-alumni.org` |
 | Accreditation Officer | `accreditation@sjcjos-alumni.org` |
 | Observer | `observer@sjcjos-alumni.org` |
 

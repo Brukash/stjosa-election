@@ -127,18 +127,16 @@ def as_aware(value: datetime | None) -> datetime | None:
 SUPER_ADMIN = "super_admin"
 CHAIRMAN = "chairman"
 ACCREDITATION = "accreditation_officer"
-RETURNING = "returning_officer"
 OBSERVER = "observer"
 
 ROLE_NAMES = {
     SUPER_ADMIN: "Super Administrator",
     CHAIRMAN: "Electoral Committee Chairman",
     ACCREDITATION: "Accreditation Officer",
-    RETURNING: "Returning Officer",
     OBSERVER: "Election Observer",
 }
 
-ROLE_RANK = {SUPER_ADMIN: 0, CHAIRMAN: 1, RETURNING: 2, ACCREDITATION: 3, OBSERVER: 4}
+ROLE_RANK = {SUPER_ADMIN: 0, CHAIRMAN: 1, ACCREDITATION: 2, OBSERVER: 3}
 
 ROLE_DESCRIPTIONS = {
     SUPER_ADMIN: (
@@ -149,11 +147,6 @@ ROLE_DESCRIPTIONS = {
         "Electoral Committee Chairman. Conducts the election end to end: creates and configures it, "
         "approves the register and verification settings, authorises and runs the count, and submits, "
         "approves and publishes the result."
-    ),
-    RETURNING: (
-        "Returning Officer. Optional second official. May approve configuration, authorise and run "
-        "counting, and submit or publish results in the Chairman's place. No step requires the "
-        "office; the committee retired the two-person rule on 2026-11-18."
     ),
     ACCREDITATION: (
         "Accreditation Officer. Imports the voter register, supports Voter ID accreditation and "
@@ -182,12 +175,6 @@ PERMISSIONS: dict[str, set[str]] = {
     ACCREDITATION: {
         "election.view", "register.view", "register.import", "accreditation.manage",
         "accreditation.oversight", "monitor.view", "commitments.view", "audit.view_limited",
-    },
-    RETURNING: {
-        "election.view", "monitor.view", "counting.authorise", "counting.run", "tally.view",
-        "verification.approve",
-        "results.review", "results.publish", "results.submit", "audit.view",
-        "commitments.view", "ballot.view_public", "lifecycle.manage",
     },
     OBSERVER: {
         "election.view", "monitor.view", "results.review_restricted", "audit.view",

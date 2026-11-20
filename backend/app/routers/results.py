@@ -271,9 +271,10 @@ def submit_results(
             "Provisional results are not awaiting submission (this election is "
             f"{STATUS_LABELS.get(election.status, election.status).lower()})",
         )
-    # The office the account is acting in, so the trail names the real official.
-    role_key = "chairman" if has_permission(roles_for(db, profile.id), "results.approve") else "returning_officer"
-    single_official = role_key == "chairman"
+    # One office now conducts the count and the declaration, so the trail always
+    # names the Chairman.
+    role_key = "chairman"
+    single_official = True
     comments = (payload.comments or "").strip()
     if single_official:
         comments = (

@@ -18,7 +18,6 @@ import json
 import math
 import os
 import secrets
-import subprocess
 import sys
 import tempfile
 import threading
@@ -26,7 +25,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 TMP = Path(tempfile.mkdtemp(prefix="sjc-results-notification-test-"))
-# The child process runs its own mock provider, so it takes a second port.
 MOCK_PORT = int(os.environ.get("SJC_TEST_EMAIL_PORT", "8898"))
 os.environ.update(
     {
@@ -69,9 +67,7 @@ from app.notifications import (  # noqa: E402
     send_results_whatsapp,
 )
 
-# The same flow runs twice: once with the Returning Officer submitting (the
-# two-official path) and once, in a child process, with the Chairman doing both.
-SINGLE_OFFICIAL = os.environ.get("SJC_TEST_SINGLE_OFFICIAL") == "1"
+# The Chairman conducts the whole flow: submission, approval and declaration.
 
 PASSWORD = "ChangeMe!2026"
 RESULTS_SUBJECT = "Official results declared"
@@ -315,17 +311,14 @@ def main() -> None:
         election_id = election["id"]
         reference = election["reference"]
         chair = login(client, "chairman@sjcjos-alumni.org")
-        returning = login(client, "returning@sjcjos-alumni.org")
 
         # ── drive the election to a declared result ─────────────────────────
         cast_one_ballot(client, election)
         for headers, path, payload in (
             (chair, f"/api/elections/{election_id}/status", {"status": "voting_closed"}),
             (chair, f"/api/tally/{election_id}/authorise", None),
-            (returning, f"/api/tally/{election_id}/authorise", None),
-            (returning, f"/api/tally/{election_id}/run", None),
-            (chair if SINGLE_OFFICIAL else returning, f"/api/results/{election_id}/submit",
-             {"comments": "Ready for approval"}),
+            (chair, f"/api/tally/{election_id}/run", None),
+            (chair, f"/api/results/{election_id}/submit", {"comments": "Ready for approval"}),
         ):
             response = client.post(path, headers=headers, **({"json": payload} if payload else {}))
             assert response.status_code == 200, (path, response.status_code, response.text)
@@ -477,17 +470,12 @@ def main() -> None:
             by_stage = {approval.stage: approval for approval in approvals}
             submission = by_stage["provisional_review"]
             declaration_approval = by_stage["final_approval"]
-            assert submission.approver_role == (
-                "chairman" if SINGLE_OFFICIAL else "returning_officer"
-            ), submission.approver_role
+            assert submission.approver_role == "chairman", submission.approver_role
             assert declaration_approval.approver_role == "chairman"
-            if SINGLE_OFFICIAL:
-                assert submission.approver_id == declaration_approval.approver_id
-                assert "single-official" in (submission.comments or "").lower()
-                assert "single-official" in (declaration_approval.comments or "").lower()
-            else:
-                assert submission.approver_id != declaration_approval.approver_id
-            assert payload["single_official_declaration"] is SINGLE_OFFICIAL
+            assert submission.approver_id == declaration_approval.approver_id
+            assert "single-official" in (submission.comments or "").lower()
+            assert "single-official" in (declaration_approval.comments or "").lower()
+            assert payload["single_official_declaration"] is True
 
             declared_audit = db.execute(
                 select(AuditLog).where(
@@ -495,27 +483,22 @@ def main() -> None:
                     AuditLog.action == "results.declare",
                 )
             ).scalars().first()
-            assert declared_audit.detail["single_official"] is SINGLE_OFFICIAL, declared_audit.detail
+            assert declared_audit.detail["single_official"] is True, declared_audit.detail
             submitted_audit = db.execute(
                 select(AuditLog).where(
                     AuditLog.election_id == election_id,
                     AuditLog.action == "results.submit",
                 )
             ).scalars().first()
-            assert submitted_audit.detail["single_official"] is SINGLE_OFFICIAL
+            assert submitted_audit.detail["single_official"] is True
             declared_event = db.execute(
                 select(ElectionEvent).where(
                     ElectionEvent.election_id == election_id,
                     ElectionEvent.event_type == "results.declared",
                 )
             ).scalars().first()
-            assert ("by one official" in declared_event.message) is SINGLE_OFFICIAL, \
-                declared_event.message
-        ok(
-            "the Chairman completes both stages alone, recorded as a single-official declaration"
-            if SINGLE_OFFICIAL
-            else "the Returning Officer submits and the Chairman declares, recorded as two officials"
-        )
+            assert "by one official" in declared_event.message, declared_event.message
+        ok("the Chairman completes both stages alone, recorded as a single-official declaration")
 
         # ── total provider outage: nothing raises, nothing is rolled back ───
         FAIL_ADDRESSES.clear()
@@ -569,23 +552,6 @@ def main() -> None:
 
     server.shutdown()
     server.server_close()
-
-    if not SINGLE_OFFICIAL:
-        # The Chairman-only path needs its own database and email mock, so it runs
-        # in a child process of this same script.
-        child = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve())],
-            env={
-                **os.environ,
-                "SJC_TEST_SINGLE_OFFICIAL": "1",
-                "SJC_TEST_EMAIL_PORT": "8899",
-            },
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        assert child.returncode == 0, (child.stdout[-4000:], child.stderr[-4000:])
-        ok("the Chairman-only path passes in its own run")
 
     print("\n" + "=" * 72)
     print(f"DECLARED-RESULT EMAIL TESTS PASSED: {len(PASSED)} checks")

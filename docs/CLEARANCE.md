@@ -25,7 +25,7 @@ Give the reviewer the `docs/SECURITY.md` protocol description and a staging depl
 `DEMO_SEED=false`. Minimum scope:
 
 1. Authentication: password hashing, lockout/rate limits, session token forgery, staff MFA bypass,
-   role escalation between Chairman / Returning Officer / Accreditation Officer / Observer.
+   role escalation between Chairman / Accreditation Officer / Observer.
 2. Accreditation abuse: enumeration of Voter IDs, guessing or sharing of Voter IDs, reused
    credentials, and concurrent requests for one voter.
 3. Ballot secrecy: confirm no API, report or database query links a voter to a ballot; verify
@@ -75,7 +75,7 @@ Do not run a load test against the production database during a live election.
    review/declaration, emergency changes and audit exports. Issue Voter IDs privately.
 3. **Pilot voting (60–90 minutes):** open accreditation, then voting; ask at least one voter to use
    challenge verification; confirm one-vote-only with a deliberate retry; test one invalid Voter ID.
-4. **Close and count:** close voting, authorise counting with Chairman + Returning Officer, review
+4. **Close and count:** close voting, authorise counting with the Chairman, review
    provisional results, declare, publish the commitment list.
 5. **Verify:** voters check receipts and inclusion; officials export the audit report (PDF/XLSX);
    compare declared totals with an independent manual count of the pilot ballots.

@@ -85,8 +85,7 @@ export default function CountingPage() {
   const keysProvisioned = data.keys_provisioned !== false;
   const roles = new Set((data.authorisations ?? []).map((row: any) => row.role));
   const myRoles = new Set<string>(profile?.roles ?? []);
-  const canCloseVoting =
-    can(profile, "election.view") && (myRoles.has("chairman") || myRoles.has("returning_officer"));
+  const canCloseVoting = can(profile, "election.view") && myRoles.has("chairman");
   const statusBlocksResults = ["draft", "configured", "approved", "accreditation_open", "voting_open"].includes(
     data.status
   );
@@ -139,22 +138,16 @@ export default function CountingPage() {
       {keysAvailable ? (
       <Card className="card-pad">
         <SectionHeading eyebrow="Authorisation" title="Authorise counting">
-          The Chairman authorises counting, and one authorisation is enough. A Returning Officer, if
-          the committee has assigned one, may authorise in the Chairman&apos;s place. Tally keys remain
+          The Chairman authorises counting, and one authorisation is enough. Tally keys remain
           encrypted and are only used by the counting service.
         </SectionHeading>
         <div className="grid gap-2 sm:grid-cols-2">
-          {["chairman", "returning_officer"].map((role) => (
-            <div key={role} className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
-              <span className="text-sm capitalize text-ink/70">
-                {role.replace(/_/g, " ")}
-                {role === "returning_officer" ? <span className="text-ink/35"> (optional)</span> : null}
-              </span>
-              <span className={roles.has(role) ? "pill-green" : "pill-grey"}>
-                {roles.has(role) ? "Authorised" : "Pending"}
-              </span>
-            </div>
-          ))}
+          <div className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
+            <span className="text-sm text-ink/70">Chairman</span>
+            <span className={roles.has("chairman") ? "pill-green" : "pill-grey"}>
+              {roles.has("chairman") ? "Authorised" : "Pending"}
+            </span>
+          </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <button
@@ -198,7 +191,7 @@ export default function CountingPage() {
               </button>
             ) : (
               <span className="text-xs text-ink/45">
-                The Chairman or Returning Officer closes voting in the Setup &amp; verification tab.
+                The Chairman closes voting in the Setup &amp; verification tab.
               </span>
             )}
           </div>

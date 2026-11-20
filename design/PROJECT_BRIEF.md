@@ -11,7 +11,7 @@ Two audiences, deliberately separated:
 
 1. **Voters** — alumni, often on a phone, not technical, sometimes low digital confidence.
    They need: what this is, when it closes, what they need (Voter ID), how to vote, proof their vote counted.
-2. **Committee officials** — Chairman (conducts the election end to end), Returning Officer (optional, may act in the Chairman's place), Accreditation Officer, Observer, Super Admin.
+2. **Committee officials** — Chairman (conducts the election end to end, including every approval), Accreditation Officer, Observer, Super Admin.
    They need the existing admin back office, unchanged in behaviour.
 
 ## Visual thesis
@@ -190,10 +190,8 @@ No gradients, no glass, no purple, no glow.
   succeeded from the row alone.
 - 2026-11-18 — **Change control:** the committee no longer requires a Returning Officer and asked the
   Chairman to conduct the election from start to finish. The two-person rule is retired: one recorded
-  approval completes configuration (and provisions keys), one authorisation is enough to count, the
-  Chairman has `counting.run`, a presiding official may approve verification settings they saved
-  (audited as `self_approved`), and a Chairman's confirmation applies an exceptional change. The
-  Returning Officer office still exists so existing accounts keep working, but no step requires it.
+  approval completes configuration (and provisions keys), one authorisation is enough to count; the Chairman has `counting.run`, a presiding official may approve verification settings they saved
+  (audited as `self_approved`), and a Chairman's confirmation applies an exceptional change.
   Trade-off accepted knowingly: a single compromised Chairman account can now complete every stage;
   the audit trail, signed evidence and published commitments are what remain as independent checks.
   This supersedes the separation-of-duties claims in earlier entries. The full mock election then exposed
@@ -201,3 +199,11 @@ No gradients, no glass, no purple, no glow.
   election would have shown a failed compliance check. It now checks that an approval was recorded
   and names the official. `scripts/smoke_test.py` also takes `SMOKE_BASE` so it can be run against a
   throwaway database instead of the development one.
+- 2026-11-20 — **The Returning Officer office is removed.** The committee asked for a single
+  presiding official, so the role, its permissions, its demo account and every check that named it
+  are gone. Configuration, verification, counting authorisation, the provisional submission, the
+  declaration and exceptional changes are all acts of the Chairman; the single-official record
+  (`self_approved`, `single_official`) still states plainly that one account performed them.
+  `supabase/migrations/0010_remove_returning_officer.sql` deletes the role and its assignments in
+  an existing database, which leaves any account that held only that office with no permissions
+  until the Super Administrator assigns it a real one.

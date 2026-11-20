@@ -220,20 +220,14 @@ export default function ElectionSetupPage() {
   // as `self_approved`). Saving settings clears the approval, so without this
   // the Chairman would be left with no way to unlock accreditation.
   const canApproveSettings = can(profile, "verification.approve");
-  const myApprovalRole = myRoles.has("chairman")
-    ? "chairman"
-    : myRoles.has("returning_officer")
-    ? "returning_officer"
-    : null;
+  const myApprovalRole = myRoles.has("chairman") ? "chairman" : null;
   const canRecordConfigurationApproval =
     Boolean(myApprovalRole) &&
     !approvalRoles.has(myApprovalRole as string) &&
     ["draft", "configured"].includes(election.status);
   const canRequestChange = can(profile, "verification.approve");
-  const lifecycleActions = (LIFECYCLE_ACTIONS[election.status] ?? []).filter((action) =>
-    action.status === "voting_closed"
-      ? myRoles.has("chairman") || myRoles.has("returning_officer")
-      : myRoles.has("chairman")
+  const lifecycleActions = (LIFECYCLE_ACTIONS[election.status] ?? []).filter(() =>
+    myRoles.has("chairman")
   );
 
   return (
@@ -360,17 +354,12 @@ export default function ElectionSetupPage() {
           <Card className="card-pad">
             <SectionHeading eyebrow="Approval" title="Configuration approval" />
             <div className="space-y-2">
-              {["chairman", "returning_officer"].map((role) => (
-                <div key={role} className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
-                  <span className="text-sm capitalize text-ink/70">
-                    {role.replace("_", " ")}
-                    {role === "returning_officer" ? <span className="text-ink/35"> (optional)</span> : null}
-                  </span>
-                  <span className={approvalRoles.has(role) ? "pill-green" : "pill-grey"}>
-                    {approvalRoles.has(role) ? "Approved" : "Pending"}
-                  </span>
-                </div>
-              ))}
+              <div className="flex items-center justify-between rounded-lg border border-rule px-3 py-2">
+                <span className="text-sm text-ink/70">Chairman</span>
+                <span className={approvalRoles.has("chairman") ? "pill-green" : "pill-grey"}>
+                  {approvalRoles.has("chairman") ? "Approved" : "Pending"}
+                </span>
+              </div>
             </div>
             <p className="mt-3 text-xs text-ink/45">
               The Chairman approves the configuration, and one approval completes it. Approval
@@ -382,8 +371,7 @@ export default function ElectionSetupPage() {
               </button>
             ) : (
               <p className="mt-3 text-xs text-ink/45">
-                Only the Chairman, or a Returning Officer acting in the Chairman&apos;s place, approves
-                the configuration.
+                Only the Electoral Committee Chairman approves the configuration.
               </p>
             )}
             {election.approved_at ? (
@@ -475,7 +463,7 @@ export default function ElectionSetupPage() {
           <span className="text-[11px] text-ink/40">
             {election.verification.approved_at
               ? `Approved ${formatDate(election.verification.approved_at)}`
-              : "Awaiting approval. The Chairman, or a Returning Officer acting in his place, approves these settings."}
+              : "Awaiting approval. The Electoral Committee Chairman approves these settings."}
           </span>
         </div>
       </Card>

@@ -97,7 +97,6 @@ Password for all seeded accounts: `ChangeMe!2026` (override with `SEED_DEFAULT_P
 | Super Administrator | `superadmin@sjcjos-alumni.org` |
 | Electoral Committee Chairman | `chairman@sjcjos-alumni.org` |
 | Accreditation Officer | `accreditation@sjcjos-alumni.org` |
-| Returning Officer | `returning@sjcjos-alumni.org` |
 | Election Observer | `observer@sjcjos-alumni.org` |
 
 Demo Voter IDs: `SJC/AL/2004/001` … `SJC/AL/2015/024`. Accreditation checks the Voter ID directly

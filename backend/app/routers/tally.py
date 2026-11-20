@@ -1,4 +1,4 @@
-"""Vote counting: dual authorisation, authorised decryption, aggregation and proofs."""
+"""Vote counting: recorded authorisation, authorised decryption, aggregation and proofs."""
 from __future__ import annotations
 
 import json
@@ -33,7 +33,6 @@ from ..services import election_stats, get_election, now
 router = APIRouter(prefix="/tally", tags=["tally"])
 
 CHAIRMAN = "chairman"
-RETURNING = "returning_officer"
 
 
 def _authorisations(db: Session, election_id: str) -> list[dict]:
@@ -128,9 +127,12 @@ def authorise_counting(
     if election.status not in {"voting_closed", "provisional_results"}:
         raise HTTPException(status.HTTP_409_CONFLICT, "Counting can only be authorised after voting closes")
     roles = roles_for(db, profile.id)
-    role_key = CHAIRMAN if CHAIRMAN in roles else RETURNING if RETURNING in roles else None
-    if not role_key:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the Chairman or Returning Officer can authorise counting")
+    if CHAIRMAN not in roles:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only the Electoral Committee Chairman can authorise counting",
+        )
+    role_key = CHAIRMAN
     existing = db.execute(
         select(TallyAuthorisation).where(
             TallyAuthorisation.election_id == election.id,
