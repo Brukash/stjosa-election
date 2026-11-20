@@ -200,7 +200,7 @@ export default function VotePage() {
 
               <div className="px-5 py-5 sm:px-7">
                 <p className="text-[13px] leading-relaxed text-ink/70">
-                  A confirmation has been emailed to you. Keep the reference below; it is the only
+                  A confirmation may be emailed to you. Either way, keep the reference below; it is the
                   thing you need to check that this ballot appears in the published record.
                 </p>
 

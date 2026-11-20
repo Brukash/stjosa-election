@@ -298,7 +298,9 @@ export default function CountingPage() {
       ) : !statusBlocksResults && keysAvailable ? (
         <Card className="card-pad">
           <p className="text-sm text-ink/60">
-            No completed count yet. Authorise counting, then run the automated count.
+            {data.authorised
+              ? "Counting is authorised. Run the automated count to produce the provisional results."
+              : "No completed count yet. Authorise counting, then run the automated count."}
           </p>
         </Card>
       ) : null}

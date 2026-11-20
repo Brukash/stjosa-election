@@ -131,7 +131,7 @@ export default function ElectionsAdminPage() {
             <p className="mt-3 text-[11px] text-ink/45">
               Voting {formatDate(election.opens_at)} → {formatDate(election.closes_at)}
             </p>
-            {election.voter_visible ? (
+            {election.voter_visible && !CLOSED_STATUSES.includes(election.status) ? (
               <div className="mt-3 rounded-lg border border-forest/30 bg-forest/[0.04] px-3 py-2">
                 <p className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-forest">
                   Shown to voters
