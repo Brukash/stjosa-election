@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
@@ -55,6 +56,31 @@ def _ensure_column(table: str, column: str, postgres_type: str, sqlite_type: str
             raise
 
 
+def _ensure_index(table: str, index: str, definition: str) -> None:
+    """Create one index when an older database lacks it.
+
+    A unique index is only an extra guard here: the application also serialises
+    the same operation with a row lock. If an old database somehow already holds
+    conflicting rows the index is skipped with a warning instead of stopping
+    every request at startup.
+    """
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        return
+    if index in {item["name"] for item in inspector.get_indexes(table)}:
+        return
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(definition))
+    except Exception:
+        if index in {item["name"] for item in inspect(engine).get_indexes(table)}:
+            return
+        print(
+            f"warning: could not create index {index}; existing rows may conflict",
+            file=sys.stderr,
+        )
+
+
 def _ensure_compatibility_columns() -> None:
     """Apply additive schema changes that create_all cannot add to old tables."""
     _ensure_column("voters", "whatsapp_consent", "BOOLEAN NOT NULL DEFAULT FALSE",
@@ -71,6 +97,12 @@ def _ensure_compatibility_columns() -> None:
     _ensure_column("elections", "voter_visible", "BOOLEAN NOT NULL DEFAULT FALSE",
                    "BOOLEAN NOT NULL DEFAULT FALSE")
     _ensure_column("elections", "key_material", "TEXT", "TEXT")
+    _ensure_index(
+        "credential_issuances",
+        "uq_active_issuance_per_accreditation",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_active_issuance_per_accreditation "
+        "ON credential_issuances (accreditation_id) WHERE status = 'issued'",
+    )
 
 
 # Serverless hosts may never send the ASGI startup event, so the archive is

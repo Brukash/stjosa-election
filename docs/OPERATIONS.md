@@ -39,6 +39,8 @@ Frontend: `NEXT_PUBLIC_API_URL=https://api.elections.your-domain.org`.
    - `supabase/migrations/0008_accreditation_session_turnout.sql` — turnout marker held on the
      verification session, so verifying the same Voter ID twice cannot invalidate an issued
      credential.
+   - `supabase/migrations/0009_one_active_credential.sql` — partial unique index giving each Voter ID
+     at most one live credential, so two simultaneous issuance requests cannot both sign one.
 3. Confirm RLS is enabled on all sensitive tables (`Supabase → Database → Tables`).
 4. Create staff accounts through the application (or seed then change every password).
 5. Never expose the database connection string to the browser; the Next.js app talks only to FastAPI.

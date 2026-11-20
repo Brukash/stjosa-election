@@ -7,6 +7,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import crypto
@@ -57,6 +58,16 @@ def _eligible_voter(db: Session, election: Election, voter_id: str) -> Voter:
     return voter
 
 
+def _ensure_not_voted(voter: Voter) -> None:
+    """One voter, one ballot. The register records an accepted ballot here, and no
+    later verification, credential or exception may reopen it."""
+    if voter.has_voted_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Voter ID has already cast a ballot in this election. One voter, one ballot.",
+        )
+
+
 def _ensure_not_issued(db: Session, election: Election, voter: Voter) -> None:
     accreditation = db.execute(
         select(AccreditationRecord).where(
@@ -94,11 +105,23 @@ def verify_voter(payload: VoterVerifyRequest, request: Request, db: Session = De
         db.commit()
         raise
 
+    if voter.has_voted_at is not None:
+        record_audit(
+            db, action="voter.verify", outcome="failure", election_id=election.id,
+            ip_address=client_ip(request), detail={"reason": "already_voted"},
+        )
+        db.commit()
+        _ensure_not_voted(voter)
+
     _ensure_not_issued(db, election, voter)
 
     # Serialise concurrent verification for the same voter. The second check
     # prevents two simultaneous requests from both opening an issuance window.
     db.execute(select(Voter.id).where(Voter.id == voter.id).with_for_update())
+    # Re-read the row: another request may have recorded a vote while this one
+    # waited for the lock.
+    db.refresh(voter)
+    _ensure_not_voted(voter)
     _ensure_not_issued(db, election, voter)
 
     accreditation = db.execute(
@@ -192,6 +215,26 @@ def request_credential(payload: CredentialRequest, request: Request, db: Session
             "A credential has already been issued for this Voter ID in this election.",
         )
 
+    voter = db.get(Voter, session.voter_row_id)
+    if voter is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "No accreditation record found")
+    _ensure_not_voted(voter)
+
+    # Serialise issuance for one voter. Without the lock two simultaneous
+    # requests could both see no active credential and each sign one, leaving a
+    # voter holding two credentials; the second request waits here and then sees
+    # the first issuance.
+    db.execute(
+        select(AccreditationRecord.id)
+        .where(AccreditationRecord.id == accreditation.id)
+        .with_for_update()
+    )
+    if _active_issuance(db, accreditation.id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A credential has already been issued for this Voter ID in this election.",
+        )
+
     blinded_hash = crypto.sha256_hex("blinded", payload.blinded_message)
     try:
         blind_signature = crypto.blind_sign(payload.blinded_message, election.reference)
@@ -206,15 +249,22 @@ def request_credential(payload: CredentialRequest, request: Request, db: Session
     # Only issuance binds the turnout marker to the voter. Because one active
     # credential exists per Voter ID, this leaves exactly one usable marker and
     # keeps the credential returned to the browser able to cast.
-    voter = db.get(Voter, session.voter_row_id)
-    if voter is not None and session.turnout_token_hash:
+    if session.turnout_token_hash:
         voter.turnout_token_hash = session.turnout_token_hash
     session.consumed_at = now()
     record_audit(
         db, action="credential.issued", election_id=election.id, entity="accreditation",
         entity_id=accreditation.id, ip_address=client_ip(request),
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A simultaneous request won the race; only one credential may exist.
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A credential has already been issued for this Voter ID in this election.",
+        )
 
     return {
         "blind_signature": blind_signature,
@@ -252,6 +302,11 @@ def reset_issuance(
     ).scalar_one_or_none()
     if not accreditation:
         raise HTTPException(status.HTTP_409_CONFLICT, "Voter has not been accredited")
+    if voter.has_voted_at is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Voter ID has already cast a ballot, so its credential cannot be reissued.",
+        )
     issuance = _active_issuance(db, accreditation.id)
     if not issuance:
         raise HTTPException(status.HTTP_409_CONFLICT, "No active credential issuance to revoke")

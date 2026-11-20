@@ -246,6 +246,17 @@ class CredentialIssuance(Base):
     status: Mapped[str] = mapped_column(String(20), default="issued", nullable=False)
 
 
+# One voter may hold exactly one live credential. A revoked row keeps its
+# history, so the index is partial: only status='issued' rows must be unique.
+Index(
+    "uq_active_issuance_per_accreditation",
+    CredentialIssuance.accreditation_id,
+    unique=True,
+    sqlite_where=CredentialIssuance.status == "issued",
+    postgresql_where=CredentialIssuance.status == "issued",
+)
+
+
 class AccreditationSession(Base):
     """Short-lived proof that Voter ID verification succeeded, used to request a signature."""
 

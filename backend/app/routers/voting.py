@@ -257,6 +257,14 @@ def cast_ballot(
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid voting credential")
 
+    digest = prepared.token_hash
+    if db.execute(
+        select(SpentCredential).where(
+            SpentCredential.election_id == election.id, SpentCredential.token_hash == digest
+        )
+    ).scalars().first():
+        raise HTTPException(status.HTTP_409_CONFLICT, "This voting credential has already been used")
+
     turnout_hash = token_hash(payload.turnout_token or "")
     voter = db.execute(
         select(Voter).where(
@@ -275,13 +283,18 @@ def cast_ballot(
             "Turnout verification is missing or invalid. Verify your Voter ID again to vote.",
         )
 
-    digest = prepared.token_hash
-    if db.execute(
-        select(SpentCredential).where(
-            SpentCredential.election_id == election.id, SpentCredential.token_hash == digest
+    # A second line of defence behind verify-voter: a turnout marker must never
+    # exist for someone the register already records as having voted.
+    if voter.has_voted_at is not None:
+        record_audit(
+            db, action="ballot.cast", outcome="failure", election_id=election.id,
+            ip_address=client_ip(request), detail={"reason": "voter_already_voted"},
         )
-    ).scalars().first():
-        raise HTTPException(status.HTTP_409_CONFLICT, "This voting credential has already been used")
+        db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Voter ID has already cast a ballot in this election.",
+        )
 
     ballot = Ballot(
         election_id=election.id,
@@ -292,47 +305,52 @@ def cast_ballot(
         selection_count=len(prepared.selections or {}),
         accepted=True,
     )
-    db.add(ballot)
-    db.flush()
-    db.add(
-        BallotCommitment(
-            election_id=election.id,
-            ballot_commitment=prepared.commitment,
-            commitment_status="accepted",
-            ballot_proof={
-                "nonce": prepared.nonce,
-                "encrypted_key": prepared.encrypted_key,
-                "ciphertext_hash": crypto.sha256_hex(prepared.ciphertext),
-                "algorithm": "RSA-OAEP-SHA256 + AES-256-GCM",
-            },
-        )
-    )
-    db.add(SpentCredential(election_id=election.id, token_hash=digest))
-    voted_at = now()
-    voter.has_voted_at = voted_at
-    voter.turnout_token_hash = None
-    receipt = _issue_receipt(db, election, ballot, prepared)
-
-    # Freeze configuration on the first accepted ballot (SRS §14.3).
-    if not election.locked_at:
-        election.locked_at = now()
-        settings_row.locked_at = now()
-        db.add(ElectionEvent(
-            election_id=election.id, event_type="configuration.locked",
-            message="Configuration and verification settings locked after the first accepted ballot",
-        ))
-
-    record_audit(
-        db, action="ballot.cast", election_id=election.id, entity="ballot", entity_id=ballot.id,
-        ip_address=client_ip(request), detail={"commitment": prepared.commitment},
-    )
-    db.add(ElectionEvent(
-        election_id=election.id, event_type="ballot.accepted",
-        message="An encrypted ballot was accepted and committed",
-    ))
     try:
+        db.add(ballot)
+        db.flush()
+        db.add(
+            BallotCommitment(
+                election_id=election.id,
+                ballot_commitment=prepared.commitment,
+                commitment_status="accepted",
+                ballot_proof={
+                    "nonce": prepared.nonce,
+                    "encrypted_key": prepared.encrypted_key,
+                    "ciphertext_hash": crypto.sha256_hex(prepared.ciphertext),
+                    "algorithm": "RSA-OAEP-SHA256 + AES-256-GCM",
+                },
+            )
+        )
+        # The unique constraint on spent_credentials is the final guard. Two
+        # simultaneous casts of one credential both reach this insert, and only
+        # the first commits, so one voter can never own two accepted ballots.
+        db.add(SpentCredential(election_id=election.id, token_hash=digest))
+        voted_at = now()
+        voter.has_voted_at = voted_at
+        voter.turnout_token_hash = None
+        receipt = _issue_receipt(db, election, ballot, prepared)
+
+        # Freeze configuration on the first accepted ballot (SRS §14.3).
+        if not election.locked_at:
+            election.locked_at = now()
+            settings_row.locked_at = now()
+            db.add(ElectionEvent(
+                election_id=election.id, event_type="configuration.locked",
+                message="Configuration and verification settings locked after the first accepted ballot",
+            ))
+
+        record_audit(
+            db, action="ballot.cast", election_id=election.id, entity="ballot", entity_id=ballot.id,
+            ip_address=client_ip(request), detail={"commitment": prepared.commitment},
+        )
+        db.add(ElectionEvent(
+            election_id=election.id, event_type="ballot.accepted",
+            message="An encrypted ballot was accepted and committed",
+        ))
         db.commit()
     except IntegrityError:
+        # Raised by the flush inside _issue_receipt as well as by the commit,
+        # because the pending duplicate is written when the ballot is flushed.
         db.rollback()
         record_audit(
             db, action="ballot.cast", outcome="failure", election_id=election.id,
