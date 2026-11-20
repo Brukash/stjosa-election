@@ -7,6 +7,16 @@ import { Crest } from "@/components/PublicShell";
 import { Alert, Card } from "@/components/ui";
 import { api, saveSession } from "@/lib/api";
 
+// Officers who are signed out mid-shift (or whose browser dropped the session)
+// come back to the page they were working on rather than the dashboard. Only
+// same-site control-room paths are honoured, so the link cannot redirect away.
+function nextDestination(): string {
+  if (typeof window === "undefined") return "/admin";
+  const next = new URLSearchParams(window.location.search).get("next");
+  if (!next || !next.startsWith("/admin") || next.startsWith("/admin/login")) return "/admin";
+  return next;
+}
+
 export default function AdminLoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -30,7 +40,7 @@ export default function AdminLoginPage() {
         }),
       });
       saveSession(data.access_token, data.profile);
-      router.replace("/admin");
+      router.replace(nextDestination());
     } catch (err: any) {
       if (err.message?.toLowerCase().includes("mfa")) setNeedsMfa(true);
       setError(err.message);

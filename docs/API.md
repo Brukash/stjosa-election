@@ -37,7 +37,9 @@ accreditation session used by `POST /accreditation/credential`. A matching ID re
 unknown, ineligible or unapproved Voter ID returns `404`. A Voter ID that already has an active
 credential returns `409`; the Accreditation Officer can reset that issuance through the audited
 exception route. No OTP is generated, sent or accepted during accreditation. The browser stores the
-`turnout_token` with the anonymous credential and sends it only when casting.
+`turnout_token` with the anonymous credential and sends it only when casting. The turnout marker is
+bound to the credential when it is issued, so verifying the same Voter ID again before requesting a
+credential cannot make an issued credential fail at cast time.
 
 `POST /voting/prepare` body:
 

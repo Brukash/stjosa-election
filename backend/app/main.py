@@ -63,6 +63,8 @@ def _ensure_compatibility_columns() -> None:
     _ensure_column("voters", "registration_sms_sent_at", "TIMESTAMPTZ", "DATETIME")
     _ensure_column("voters", "registration_whatsapp_sent_at", "TIMESTAMPTZ", "DATETIME")
     _ensure_column("voters", "turnout_token_hash", "VARCHAR(128)", "VARCHAR(128)")
+    _ensure_column("accreditation_sessions", "turnout_token_hash",
+                   "VARCHAR(128)", "VARCHAR(128)")
     _ensure_column("voters", "has_voted_at", "TIMESTAMPTZ", "DATETIME")
     _ensure_column("notification_deliveries", "purpose",
                    "VARCHAR(20) NOT NULL DEFAULT 'otp'", "VARCHAR(20) NOT NULL DEFAULT 'otp'")

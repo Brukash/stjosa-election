@@ -5,7 +5,16 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Crest } from "@/components/PublicShell";
 import { NotAuthorized } from "@/components/ui";
-import { api, clearSession, getToken, saveSession } from "@/lib/api";
+import {
+  api,
+  clearSession,
+  getProfile,
+  getToken,
+  refreshSession,
+  saveSession,
+  SESSION_EXPIRED_EVENT,
+  tokenExpiresAt,
+} from "@/lib/api";
 
 const NAV = [
   { href: "/admin", label: "Monitoring", permission: "monitor.view" },
@@ -41,6 +50,23 @@ function requiredPermissions(pathname: string): string[] | null {
   return null;
 }
 
+// A polling day runs around the clock, so an officer may stay signed in for a
+// full 24 hours. The token is renewed in the background whenever less than four
+// hours remain, which is well before expiry, so a working session never ends in
+// a surprise sign-out. If the browser is closed long enough for the token to
+// lapse, signing in returns the officer to the exact page they were working on.
+const RENEW_BEFORE_MS = 4 * 60 * 60 * 1000;
+const RENEW_CHECK_MS = 10 * 60 * 1000;
+
+function currentPath(): string {
+  if (typeof window === "undefined") return "/admin";
+  return `${window.location.pathname}${window.location.search}`;
+}
+
+function loginPath(next: string): string {
+  return `/admin/login?next=${encodeURIComponent(next)}`;
+}
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -48,26 +74,82 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [checked, setChecked] = useState(false);
   const isLogin = pathname === "/admin/login";
 
+  // A rejected token is handled in one place: drop the session and send the
+  // officer back to sign in, still pointing at the page they were using.
+  useEffect(() => {
+    if (isLogin) return;
+    const onExpired = () => {
+      clearSession();
+      router.replace(loginPath(currentPath()));
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, [isLogin, router]);
+
   useEffect(() => {
     if (isLogin) {
       setChecked(true);
       return;
     }
     if (!getToken()) {
-      router.replace("/admin/login");
+      router.replace(loginPath(currentPath()));
       return;
     }
+    let cancelled = false;
     api("/api/auth/me", { auth: true })
       .then((me) => {
+        if (cancelled) return;
         saveSession(getToken() as string, me);
         setProfile(me);
         setChecked(true);
       })
-      .catch(() => {
+      .catch((err: any) => {
+        if (cancelled) return;
+        // Only an authentication failure ends the session. A dropped network or
+        // a 5xx during the count must not sign an officer out mid-election.
+        if (!(err?.status === 401 || err?.status === 403)) {
+          const cached = getProfile();
+          if (cached) {
+            setProfile(cached);
+            setChecked(true);
+            return;
+          }
+        }
         clearSession();
-        router.replace("/admin/login");
+        router.replace(loginPath(currentPath()));
       });
+    return () => {
+      cancelled = true;
+    };
   }, [isLogin, pathname, router]);
+
+  // Keeps a long shift alive: a check on entry, every ten minutes, and whenever
+  // the tab is brought back after the laptop slept.
+  useEffect(() => {
+    if (isLogin || !checked || !profile) return;
+    let stopped = false;
+    const renew = async () => {
+      const expiresAt = tokenExpiresAt(getToken());
+      if (expiresAt === null || expiresAt - Date.now() > RENEW_BEFORE_MS) return;
+      try {
+        const me = await refreshSession();
+        if (!stopped) setProfile(me);
+      } catch {
+        // The next check retries; a dead token already sends the officer to sign in.
+      }
+    };
+    void renew();
+    const timer = window.setInterval(() => void renew(), RENEW_CHECK_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void renew();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [isLogin, checked, profile]);
 
   if (isLogin) return <>{children}</>;
 
@@ -133,8 +215,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <button
                 className="inline-flex min-h-[44px] items-center rounded-[5px] border border-ink/20 px-2.5 text-[11.5px] font-semibold text-ink/75 transition hover:border-ink/45 hover:text-ink sm:min-h-[40px] sm:px-3"
                 onClick={() => {
+                  const returnTo = currentPath();
                   clearSession();
-                  router.replace("/admin/login");
+                  router.replace(loginPath(returnTo));
                 }}
               >
                 Sign out

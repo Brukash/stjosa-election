@@ -168,7 +168,7 @@ export default function AdminDashboardPage() {
           </Card>
 
           <Card className="card-pad">
-            <SectionHeading eyebrow="Registration delivery" title="Email and WhatsApp notices">
+            <SectionHeading eyebrow="Registration delivery" title="Email, SMS and WhatsApp notices">
               Successful sends and failures are recorded without message contents or full voter contact
               details.
             </SectionHeading>

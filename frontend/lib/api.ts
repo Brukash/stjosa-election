@@ -59,6 +59,36 @@ export function clearSession() {
   window.localStorage.removeItem(PROFILE_KEY);
 }
 
+// Any authenticated request that comes back 401 means the stored token is no
+// longer usable. The control room listens for this once and sends the officer to
+// sign in again, returning them to the page they were on.
+export const SESSION_EXPIRED_EVENT = "sjc:session-expired";
+
+/** Expiry of a stored JWT in milliseconds, or null when it cannot be read. */
+export function tokenExpiresAt(token: string | null = getToken()): number | null {
+  if (!token) return null;
+  const segment = token.split(".")[1];
+  if (!segment) return null;
+  try {
+    const normalized = segment.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded));
+    return typeof payload?.exp === "number" ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Swap a still-valid session token for a fresh one and keep the profile current. */
+export async function refreshSession(): Promise<any> {
+  const data = await api<{ access_token: string; profile: any }>("/api/auth/refresh", {
+    method: "POST",
+    auth: true,
+  });
+  saveSession(data.access_token, data.profile);
+  return data.profile;
+}
+
 // Actions inside an election workspace change its status or configuration hash.
 // The workspace header loads the election once, so it listens for this event;
 // without it the pill and hash keep showing the previous step until a reload.
@@ -98,6 +128,9 @@ export async function api<T = any>(
     throw new ApiError(UNREADABLE_RESPONSE_MESSAGE, response.status);
   }
   if (!response.ok) {
+    if (auth && response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
     const detail =
       typeof body === "object" && body?.detail
         ? typeof body.detail === "string"

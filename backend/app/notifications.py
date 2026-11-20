@@ -5,9 +5,9 @@ Security rules enforced here:
     supplied by the caller.
   * The OTP is never logged and never written to the database; only a masked
     recipient, provider message id and failure reason are recorded.
-  * WhatsApp is only offered where the voter has a recorded opt-in. It uses the
-    official Meta WhatsApp Business Platform, never a personal account or
-    browser automation.
+  * WhatsApp is only offered where the voter has a recorded opt-in. It uses an
+    official WhatsApp Business Platform (Meta Cloud API or a Termii WhatsApp
+    device), never a personal account or browser automation.
   * Outside local development the OTP is never returned by the API. If no
     delivery channel is configured, the request fails instead of revealing it.
   * Delivery failures never expose the OTP or provider credentials.
@@ -100,8 +100,41 @@ def _sms_provider() -> str:
     return settings.sms_provider.strip().lower()
 
 
-def _whatsapp_provider() -> str:
-    return settings.whatsapp_provider.strip().lower()
+def _termii_whatsapp_template_id(purpose: str) -> str:
+    """The approved Termii template id for one notice purpose."""
+    return {
+        "otp": settings.termii_whatsapp_otp_template_id,
+        "registration": settings.termii_whatsapp_registration_template_id,
+        "vote_confirmation": settings.termii_whatsapp_vote_confirmation_template_id,
+        "results": settings.termii_whatsapp_results_template_id,
+    }[purpose].strip()
+
+
+def whatsapp_template_reference(purpose: str) -> str:
+    """Template name (Meta) or template id (Termii) for one notice purpose."""
+    if settings.whatsapp_provider_key == "termii":
+        return _termii_whatsapp_template_id(purpose)
+    return {
+        "registration": settings.whatsapp_registration_template_name,
+        "vote_confirmation": settings.whatsapp_vote_confirmation_template_name,
+        "results": settings.whatsapp_results_template_name,
+    }[purpose]
+
+
+def whatsapp_template_language(purpose: str) -> str:
+    """The Meta template language for one purpose.
+
+    Each Meta template has its own approved language, so the purpose selects
+    the matching setting. A Termii template id already fixes the language, so
+    no language is reported for that provider.
+    """
+    if settings.whatsapp_provider_key == "termii":
+        return ""
+    return {
+        "registration": settings.whatsapp_registration_template_language,
+        "vote_confirmation": settings.whatsapp_vote_confirmation_template_language,
+        "results": settings.whatsapp_results_template_language,
+    }[purpose]
 
 
 def channel_options(voter: Voter) -> list[ChannelOption]:
@@ -155,7 +188,7 @@ def channel_options(voter: Voter) -> list[ChannelOption]:
             label=CHANNEL_LABELS["whatsapp"],
             available=whatsapp_reason is None,
             destination_masked=mask_phone(phone) if phone else "—",
-            provider="meta" if settings.whatsapp_configured else "none",
+            provider=settings.whatsapp_provider_key if settings.whatsapp_configured else "none",
             reason=whatsapp_reason,
         ),
     ]
@@ -175,6 +208,43 @@ def channel_options(voter: Voter) -> list[ChannelOption]:
             )
         )
     return options
+
+
+TERMII_PENDING_SENDER_ID = "SJCALUMNI"
+
+
+def _sms_readiness_reason() -> str | None:
+    """Why SMS cannot send, in the Super Administrator's words.
+
+    A sender ID is the name Nigerian networks show as the sender of an SMS.
+    Termii rejects every message without an approved one, so a valid API key
+    alone is not enough to call SMS configured.
+    """
+    if _sms_provider() == "termii":
+        if not settings.termii_api_key:
+            return "TERMII_API_KEY is not set, so no SMS can be sent."
+        if not settings.termii_sender_id:
+            return (
+                "SMS is not configured because no approved Termii sender ID exists. "
+                f"The {TERMII_PENDING_SENDER_ID} application is still a draft: open "
+                "Termii → Rental → SMS Sender IDs, choose country Nigeria and submit "
+                "it for review. Set TERMII_SENDER_ID only after Termii approves it."
+            )
+        return None
+    if _sms_provider() == "twilio":
+        missing = [
+            name
+            for name, value in (
+                ("TWILIO_ACCOUNT_SID", settings.twilio_account_sid),
+                ("TWILIO_AUTH_TOKEN", settings.twilio_auth_token),
+                ("TWILIO_FROM_NUMBER", settings.twilio_from_number),
+            )
+            if not value
+        ]
+        if missing:
+            return "Twilio is selected but " + ", ".join(missing) + " is not set."
+        return None
+    return "No SMS provider is selected; set SMS_PROVIDER=termii."
 
 
 def provider_status() -> list[dict]:
@@ -210,6 +280,7 @@ def provider_status() -> list[dict]:
             "label": "SMS",
             "provider": _sms_provider(),
             "configured": settings.sms_configured,
+            "reason": _sms_readiness_reason(),
             "required_settings": (
                 ["SMS_PROVIDER=termii", "TERMII_API_KEY", "TERMII_SENDER_ID"]
                 if _sms_provider() == "termii"
@@ -224,27 +295,29 @@ def provider_status() -> list[dict]:
         {
             "channel": "whatsapp",
             "label": "WhatsApp",
-            "provider": _whatsapp_provider(),
+            "provider": settings.whatsapp_provider_key,
             "configured": settings.whatsapp_configured,
-            "required_settings": [
-                "WHATSAPP_PROVIDER=meta",
-                "WHATSAPP_ACCESS_TOKEN",
-                "WHATSAPP_PHONE_NUMBER_ID",
-                "WHATSAPP_REGISTRATION_TEMPLATE_NAME",
-                "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME",
-                "WHATSAPP_RESULTS_TEMPLATE_NAME",
-            ],
-            "template": settings.whatsapp_registration_template_name,
-            "template_language": settings.whatsapp_registration_template_language,
-            "registration_template": settings.whatsapp_registration_template_name,
-            "registration_template_language": settings.whatsapp_registration_template_language,
-            "registration_configured": settings.whatsapp_registration_configured,
-            "vote_confirmation_template": settings.whatsapp_vote_confirmation_template_name,
-            "vote_confirmation_template_language": settings.whatsapp_vote_confirmation_template_language,
-            "vote_confirmation_configured": settings.whatsapp_vote_confirmation_configured,
-            "results_template": settings.whatsapp_results_template_name,
-            "results_template_language": settings.whatsapp_results_template_language,
-            "results_configured": settings.whatsapp_results_configured,
+            "required_settings": (
+                [
+                    "WHATSAPP_PROVIDER=termii",
+                    "TERMII_API_KEY",
+                    "TERMII_WHATSAPP_DEVICE_ID",
+                    "TERMII_WHATSAPP_REGISTRATION_TEMPLATE_ID",
+                    "TERMII_WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_ID",
+                    "TERMII_WHATSAPP_RESULTS_TEMPLATE_ID",
+                ]
+                if settings.whatsapp_provider_key == "termii"
+                else [
+                    "WHATSAPP_PROVIDER=meta",
+                    "WHATSAPP_ACCESS_TOKEN",
+                    "WHATSAPP_PHONE_NUMBER_ID",
+                    "WHATSAPP_REGISTRATION_TEMPLATE_NAME",
+                    "WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME",
+                    "WHATSAPP_RESULTS_TEMPLATE_NAME",
+                ]
+            ),
+            "template": whatsapp_template_reference("registration"),
+            "template_language": whatsapp_template_language("registration"),
             "consent_required": True,
             "delivery_status_webhook": {
                 "url": f"{settings.api_origin}/api/webhooks/whatsapp",
@@ -467,6 +540,32 @@ def _send_twilio(
         return None, "sms provider returned an invalid response"
 
 
+_TERMII_SUCCESS_CODES = {"ok", "success", "00", "0", "200"}
+
+
+def _termii_accepted_message(
+    response: httpx.Response, channel: str
+) -> tuple[str | None, str | None]:
+    """Read one Termii send response the same way for SMS and WhatsApp.
+
+    Termii confirms an accepted message with `code: "ok"` and a `message_id`.
+    A non-2xx status or any other code means the message was not accepted.
+    """
+    if response.status_code >= 300:
+        return None, f"{channel} provider rejected the message ({response.status_code})"
+    try:
+        data = response.json()
+        code = str(data.get("code") or "").lower()
+        message_id = str(data.get("message_id") or "")
+    except (ValueError, AttributeError):
+        return None, f"{channel} provider returned an invalid response"
+    if code and code not in _TERMII_SUCCESS_CODES:
+        return None, f"{channel} provider did not confirm delivery"
+    if not message_id:
+        return None, f"{channel} provider did not confirm a message id"
+    return message_id, None
+
+
 def _send_termii(
     destination: str, body: str, *, timeout_seconds: int | None = None
 ) -> tuple[str | None, str | None]:
@@ -487,27 +586,80 @@ def _send_termii(
     timeout = timeout_seconds or settings.otp_delivery_timeout_seconds
     with httpx.Client(timeout=timeout) as client:
         response = _post_with_retry(client, url, json=payload)
-    if response.status_code >= 300:
-        return None, f"sms provider rejected the message ({response.status_code})"
+    return _termii_accepted_message(response, "sms")
+
+
+def _send_termii_whatsapp(
+    destination: str,
+    template_id: str,
+    variables: list[str],
+    *,
+    timeout_seconds: int | None = None,
+    attempts: int = 2,
+) -> tuple[str | None, str | None]:
+    """Send an approved WhatsApp template through Termii's WhatsApp device.
+
+    Termii fills the <%1%>, <%2%>, … placeholders of the template approved in
+    the dashboard from `data` keys "1", "2", … in the same order. The device id
+    chooses which WhatsApp number sends, and each notice purpose uses its own
+    template id from TERMII_WHATSAPP_*_TEMPLATE_ID.
+    """
+    if not template_id:
+        return None, "whatsapp template id is not configured for this notice"
+    payload = {
+        "api_key": settings.termii_api_key,
+        "phone_number": "".join(ch for ch in destination if ch.isdigit()),
+        "device_id": settings.termii_whatsapp_device_id,
+        "template_id": template_id,
+        "data": {str(index): value for index, value in enumerate(variables, start=1)},
+    }
+    url = f"{settings.termii_api_base}/api/send/template"
+    timeout = timeout_seconds or settings.otp_delivery_timeout_seconds
+    with httpx.Client(timeout=timeout) as client:
+        response = _post_with_retry(client, url, attempts=attempts, json=payload)
+    return _termii_accepted_message(response, "whatsapp")
+
+
+def _termii_whatsapp_result(
+    purpose: str,
+    variables: list[str],
+    destination: str,
+    *,
+    timeout_seconds: int | None = None,
+    attempts: int = 2,
+) -> DeliveryResult:
+    """DeliveryResult wrapper around the Termii WhatsApp template sender."""
     try:
-        data = response.json()
-        message_id = str(data.get("message_id") or data.get("id") or "")
-        code = str(data.get("code") or "").lower()
-        if code and code not in {"ok", "success", "00", "0", "200"}:
-            return None, "sms provider did not confirm delivery"
-        if not message_id:
-            return None, "sms provider did not confirm a message id"
-        return message_id, None
-    except (ValueError, AttributeError):
-        return None, "sms provider returned an invalid response"
+        message_id, error = _send_termii_whatsapp(
+            destination,
+            _termii_whatsapp_template_id(purpose),
+            variables,
+            timeout_seconds=timeout_seconds,
+            attempts=attempts,
+        )
+    except Exception as exc:
+        message_id, error = None, f"whatsapp delivery unavailable ({type(exc).__name__})"
+    return DeliveryResult(
+        channel="whatsapp",
+        provider="termii",
+        status="failed" if error else "sent",
+        recipient_masked=mask_phone(destination),
+        provider_message_id=message_id,
+        error=error,
+    )
 
 
 def _send_whatsapp(destination: str, otp: str) -> tuple[str | None, str | None]:
-    """Send an approved authentication template through Meta Cloud API.
+    """Send an approved authentication template through the configured provider.
 
-    Meta authentication templates require the code in both the body and the
-    OTP button. The button is exposed as a URL button by Meta after approval.
+    Meta authentication templates require the code in both the body and the OTP
+    button; the button is exposed as a URL button after approval. A Termii OTP
+    template receives the code as its only variable.
     """
+    if settings.whatsapp_provider_key == "termii":
+        return _send_termii_whatsapp(
+            destination, _termii_whatsapp_template_id("otp"), [otp]
+        )
     to = "".join(ch for ch in destination if ch.isdigit())
     parameters = [{"type": "text", "text": otp}]
     payload = {
@@ -653,11 +805,17 @@ def send_registration_whatsapp(
     election_title: str,
     destination: str,
 ) -> DeliveryResult:
-    """Send the approved registration utility template through Meta Cloud API.
+    """Send the approved registration utility template through the provider.
 
     This is the single payload builder used by register approval and the local
     delivery test, so both send exactly the same template and parameters.
     """
+    if settings.whatsapp_provider_key == "termii":
+        return _termii_whatsapp_result(
+            "registration",
+            [voter_name, election_title, voter_id],
+            destination,
+        )
     to = "".join(ch for ch in destination if ch.isdigit())
     parameters = [
         {"type": "text", "text": voter_name},
@@ -939,7 +1097,15 @@ def send_vote_confirmation_whatsapp(
     submitted_label: str,
     destination: str,
 ) -> DeliveryResult:
-    """Send the approved vote-confirmation utility template via Meta Cloud API."""
+    """Send the approved vote-confirmation utility template through the provider."""
+    if settings.whatsapp_provider_key == "termii":
+        return _termii_whatsapp_result(
+            "vote_confirmation",
+            [voter_name, election_title, submitted_label],
+            destination,
+            timeout_seconds=settings.vote_confirmation_timeout_seconds,
+            attempts=1,
+        )
     to = "".join(ch for ch in destination if ch.isdigit())
     parameters = [
         {"type": "text", "text": voter_name},
@@ -1402,11 +1568,19 @@ def send_results_whatsapp(
     results_url: str,
     destination: str,
 ) -> DeliveryResult:
-    """Send the approved results utility template through Meta Cloud API.
+    """Send the approved results utility template through the provider.
 
-    Parameters: {{1}} voter name, {{2}} election title, {{3}} results link. The
+    Parameters: first voter name, second election title, third results link. The
     full figures stay on the published declaration page.
     """
+    if settings.whatsapp_provider_key == "termii":
+        return _termii_whatsapp_result(
+            "results",
+            [voter_name, election_title, results_url],
+            destination,
+            timeout_seconds=settings.vote_confirmation_timeout_seconds,
+            attempts=1,
+        )
     to = "".join(ch for ch in destination if ch.isdigit())
     payload = {
         "messaging_product": "whatsapp",

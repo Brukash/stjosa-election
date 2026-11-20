@@ -19,19 +19,28 @@ export default function DeliverySettingsPage() {
   return (
     <div className="space-y-5">
       <SectionHeading eyebrow="Technical settings" title="Notification delivery providers">
-        The Super Administrator manages provider credentials for registration emails and WhatsApp
-        notices in the server-side environment or deployment secret store. Secrets are never editable
-        here, returned by the API, or stored in the browser.
+        The Super Administrator manages provider credentials for email, SMS and WhatsApp notices in
+        the server-side environment or deployment secret store. Secrets are never editable here,
+        returned by the API, or stored in the browser.
       </SectionHeading>
 
       {error ? <Alert tone="error">{error}</Alert> : null}
 
       {data ? (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {data.providers
+            .filter((item: any) => !item.configured && item.reason)
+            .map((item: any) => (
+              <Alert key={item.channel} tone="warn">
+                {item.reason}
+              </Alert>
+            ))}
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
             <Stat label="Environment" value={data.environment} />
             <Stat label="Delivery mode" value={data.delivery_mode} />
             <Stat label="Email provider" value={data.providers.find((item: any) => item.channel === "email")?.provider ?? "none"} />
+            <Stat label="SMS provider" value={data.providers.find((item: any) => item.channel === "sms")?.provider ?? "none"} />
             <Stat label="WhatsApp provider" value={data.providers.find((item: any) => item.channel === "whatsapp")?.provider ?? "none"} />
           </div>
 
@@ -52,6 +61,11 @@ export default function DeliverySettingsPage() {
                 <p className="mt-2 text-xs text-ink/50">
                   Provider: <span className="font-mono">{provider.provider}</span>
                 </p>
+                {!provider.configured && provider.reason ? (
+                  <p className="mt-2 rounded-[6px] border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-900">
+                    {provider.reason}
+                  </p>
+                ) : null}
                 <p className="mt-4 text-[11px] font-semibold uppercase tracking-wide text-ink/40">
                   Required server variables
                 </p>
@@ -63,7 +77,10 @@ export default function DeliverySettingsPage() {
                 {provider.channel === "whatsapp" ? (
                   <div className="mt-4 space-y-1 border-t border-rule pt-3 text-[11px] text-ink/55">
                     <p>Template: <span className="font-mono">{provider.template}</span></p>
-                    <p>Language: <span className="font-mono">{provider.template_language}</span></p>
+                    <p>
+                      Language:{" "}
+                      <span className="font-mono">{provider.template_language || "fixed by the template id"}</span>
+                    </p>
                     <p>Consent is required for every voter before WhatsApp is offered.</p>
                     <p className="break-all">
                       Webhook: <span className="font-mono">{provider.delivery_status_webhook?.url}</span>
@@ -108,7 +125,7 @@ export default function DeliverySettingsPage() {
             </dl>
             <Alert tone="info">
               {data.security_note} After changing provider variables, restart or redeploy the API.
-              Verify the sender domain and Meta template before an official election.
+              Verify the sender and the approved WhatsApp template before an official election.
             </Alert>
           </Card>
         </>

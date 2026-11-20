@@ -361,8 +361,8 @@ export default function RegisterPage() {
           <p className="text-sm leading-relaxed text-ink/60">
             Only the Chairman can approve the register. Approved voters become eligible for
             accreditation; changes are locked once the first ballot is cast. Approval also sends
-            a registration notice by email and WhatsApp where a contact, consent and provider are
-            available.
+            a registration notice by email, SMS and WhatsApp where a contact, consent and provider
+            are available.
           </p>
           {canApprove ? (
             <button className="btn-dark mt-4 w-full" onClick={approveRegister} disabled={busy}>

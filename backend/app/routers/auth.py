@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..db import get_db
 from ..deps import client_ip, current_roles, get_current_profile, record_audit, roles_for, utcnow
 from ..models import Profile
@@ -78,6 +79,24 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 @router.get("/me")
 def me(profile: Profile = Depends(get_current_profile), db: Session = Depends(get_db)):
     return profile_payload(db, profile)
+
+
+@router.post("/refresh")
+def refresh(profile: Profile = Depends(get_current_profile), db: Session = Depends(get_db)):
+    """Replace a live session token with a fresh one.
+
+    Election shifts last a whole day, so the control room renews shortly before
+    expiry instead of signing an officer out mid-task. Roles are read from the
+    database again, so a role change takes effect on the next renewal. A token
+    that has already expired cannot be refreshed; the officer signs in again.
+    """
+    roles = roles_for(db, profile.id)
+    return {
+        "access_token": create_access_token(profile.id, roles),
+        "token_type": "bearer",
+        "expires_in": settings.access_token_ttl_minutes * 60,
+        "profile": profile_payload(db, profile),
+    }
 
 
 @router.post("/mfa/enroll")

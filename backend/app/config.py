@@ -49,7 +49,11 @@ class Settings:
     otp_max_attempts: int = _int("OTP_MAX_ATTEMPTS", 5)
     otp_resend_seconds: int = _int("OTP_RESEND_SECONDS", 60)
     otp_max_requests_per_hour: int = _int("OTP_MAX_REQUESTS_PER_HOUR", 10)
-    access_token_ttl_minutes: int = _int("ACCESS_TOKEN_TTL_MINUTES", 480)
+    # A polling shift can run for a full election day, so the default lifetime
+    # covers 24 hours. The control room renews the token in the background well
+    # before it lapses, which keeps a working officer signed in indefinitely
+    # while still ending a session that was abandoned for a whole day.
+    access_token_ttl_minutes: int = _int("ACCESS_TOKEN_TTL_MINUTES", 1440)
 
     # Requesting the on-screen OTP is only honoured when the deployment is local
     # development. It can never be enabled in production by this flag alone.
@@ -87,9 +91,10 @@ class Settings:
     twilio_from_number: str = os.getenv("TWILIO_FROM_NUMBER", "")
     sms_api_base: str = os.getenv("SMS_API_BASE", "https://api.twilio.com").rstrip("/")
 
-    # WhatsApp uses the official Meta WhatsApp Business Platform / Cloud API.
+    # WhatsApp uses an official WhatsApp Business Platform: either Meta's Cloud
+    # API directly, or Termii's WhatsApp device, which resells the same platform.
     # A personal WhatsApp account or browser automation is never used.
-    whatsapp_provider: str = os.getenv("WHATSAPP_PROVIDER", "none")  # meta | none
+    whatsapp_provider: str = os.getenv("WHATSAPP_PROVIDER", "none")  # meta | termii | none
     whatsapp_access_token: str = os.getenv("WHATSAPP_ACCESS_TOKEN", "")
     whatsapp_phone_number_id: str = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
     whatsapp_business_account_id: str = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "")
@@ -125,6 +130,24 @@ class Settings:
     )
     whatsapp_app_secret: str = os.getenv("WHATSAPP_APP_SECRET", "")
     whatsapp_verify_token: str = os.getenv("WHATSAPP_VERIFY_TOKEN", "")
+
+    # Termii can carry WhatsApp from a device created in its dashboard. Each
+    # notice purpose uses the id of its own approved template, because Termii
+    # templates are approved per device. Their placeholders are <%1%>, <%2%>, …
+    # and are filled from data keys "1", "2", … in order.
+    termii_whatsapp_device_id: str = os.getenv("TERMII_WHATSAPP_DEVICE_ID", "")
+    termii_whatsapp_otp_template_id: str = os.getenv(
+        "TERMII_WHATSAPP_OTP_TEMPLATE_ID", ""
+    )
+    termii_whatsapp_registration_template_id: str = os.getenv(
+        "TERMII_WHATSAPP_REGISTRATION_TEMPLATE_ID", ""
+    )
+    termii_whatsapp_vote_confirmation_template_id: str = os.getenv(
+        "TERMII_WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_ID", ""
+    )
+    termii_whatsapp_results_template_id: str = os.getenv(
+        "TERMII_WHATSAPP_RESULTS_TEMPLATE_ID", ""
+    )
 
     otp_delivery_timeout_seconds: int = _int("OTP_DELIVERY_TIMEOUT_SECONDS", 10)
     # Post-cast confirmations run in the background and are not retried; keep
@@ -207,8 +230,20 @@ class Settings:
         return False
 
     @property
+    def whatsapp_provider_key(self) -> str:
+        return self.whatsapp_provider.strip().lower()
+
+    def termii_whatsapp_ready_for(self, template_id: str) -> bool:
+        """Termii needs the API key, the WhatsApp device and that purpose's template."""
+        return bool(self.termii_api_key and self.termii_whatsapp_device_id and template_id)
+
+    @property
     def whatsapp_configured(self) -> bool:
-        if self.whatsapp_provider.strip().lower() != "meta":
+        if self.whatsapp_provider_key == "termii":
+            return self.termii_whatsapp_ready_for(
+                self.termii_whatsapp_registration_template_id
+            )
+        if self.whatsapp_provider_key != "meta":
             return False
         return bool(
             self.whatsapp_access_token
@@ -218,8 +253,12 @@ class Settings:
 
     @property
     def whatsapp_registration_configured(self) -> bool:
+        if self.whatsapp_provider_key == "termii":
+            return self.termii_whatsapp_ready_for(
+                self.termii_whatsapp_registration_template_id
+            )
         return bool(
-            self.whatsapp_provider.strip().lower() == "meta"
+            self.whatsapp_provider_key == "meta"
             and self.whatsapp_access_token
             and self.whatsapp_phone_number_id
             and self.whatsapp_registration_template_name
@@ -227,8 +266,12 @@ class Settings:
 
     @property
     def whatsapp_vote_confirmation_configured(self) -> bool:
+        if self.whatsapp_provider_key == "termii":
+            return self.termii_whatsapp_ready_for(
+                self.termii_whatsapp_vote_confirmation_template_id
+            )
         return bool(
-            self.whatsapp_provider.strip().lower() == "meta"
+            self.whatsapp_provider_key == "meta"
             and self.whatsapp_access_token
             and self.whatsapp_phone_number_id
             and self.whatsapp_vote_confirmation_template_name
@@ -236,8 +279,12 @@ class Settings:
 
     @property
     def whatsapp_results_configured(self) -> bool:
+        if self.whatsapp_provider_key == "termii":
+            return self.termii_whatsapp_ready_for(
+                self.termii_whatsapp_results_template_id
+            )
         return bool(
-            self.whatsapp_provider.strip().lower() == "meta"
+            self.whatsapp_provider_key == "meta"
             and self.whatsapp_access_token
             and self.whatsapp_phone_number_id
             and self.whatsapp_results_template_name

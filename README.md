@@ -131,7 +131,13 @@ every channel the register and committee allow:
 | WhatsApp registration notices | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_REGISTRATION_TEMPLATE_NAME`, `WHATSAPP_REGISTRATION_TEMPLATE_LANGUAGE` |
 | WhatsApp vote confirmations | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_NAME`, `WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_LANGUAGE` |
 | WhatsApp declared results | Meta WhatsApp Business Platform (Cloud API) | `WHATSAPP_PROVIDER=meta`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_RESULTS_TEMPLATE_NAME`, `WHATSAPP_RESULTS_TEMPLATE_LANGUAGE` |
+| WhatsApp (all three notices) through Termii | Termii WhatsApp Business device | `WHATSAPP_PROVIDER=termii`, `TERMII_API_KEY`, `TERMII_WHATSAPP_DEVICE_ID`, `TERMII_WHATSAPP_REGISTRATION_TEMPLATE_ID`, `TERMII_WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_ID`, `TERMII_WHATSAPP_RESULTS_TEMPLATE_ID` |
 | WhatsApp status webhook | Meta | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` |
+
+SMS only counts as configured once the gateway has approved the sender ID, so a valid API key on its
+own is not enough. A sender ID application that is still a draft because no country has been chosen
+cannot be reviewed; until it is approved the API reports SMS as unavailable and continues by email
+and WhatsApp. `docs/OPERATIONS.md` lists the current sender ID status and the exact dashboard steps.
 
 Successful channels are timestamped on the voter (`registration_email_sent_at`,
 `registration_sms_sent_at`, `registration_whatsapp_sent_at`). Approving the register again retries only

@@ -36,6 +36,9 @@ Frontend: `NEXT_PUBLIC_API_URL=https://api.elections.your-domain.org`.
      reporting.
    - `supabase/migrations/0006_election_key_material.sql` — encrypted key archive on the election row.
    - `supabase/migrations/0007_registration_sms.sql` — per-voter registration SMS timestamp.
+   - `supabase/migrations/0008_accreditation_session_turnout.sql` — turnout marker held on the
+     verification session, so verifying the same Voter ID twice cannot invalidate an issued
+     credential.
 3. Confirm RLS is enabled on all sensitive tables (`Supabase → Database → Tables`).
 4. Create staff accounts through the application (or seed then change every password).
 5. Never expose the database connection string to the browser; the Next.js app talks only to FastAPI.
@@ -140,6 +143,14 @@ about 50, since the app records each voter's sent channel and only retries the m
 
 
 ### SMS — Termii (recommended for Nigerian numbers)
+
+**Current status (19 November 2026).** The account has a valid API key but **no approved sender
+ID**, so `/admin/delivery` reports SMS as **Not configured** and no SMS is attempted. The
+`SJCALUMNI` sender ID is saved as a Termii **draft**, and Termii will not review it until a country
+is chosen. Finish it in the dashboard: *Rental → SMS Sender IDs → open `SJCALUMNI` → country:
+Nigeria → submit for review*. After approval, set `TERMII_SENDER_ID=SJCALUMNI` and ask Termii
+support to enable the DND/transactional route. Until both are done, SMS stays unavailable and
+registration, vote and result notices continue by email and, with consent, WhatsApp.
 
 1. **Create the account.** Sign up at `termii.com`; the starter plan includes REST API access and a
    sandbox for testing. Production SMS credits are purchased in the dashboard — confirm current
@@ -260,6 +271,41 @@ cd backend
 
 Each run sends exactly one real billable message and prints only the template, masked recipient and
 provider message id.
+
+### WhatsApp — Termii WhatsApp device
+
+Termii can carry the same three Utility notices through a WhatsApp Business device instead of Meta.
+Set `WHATSAPP_PROVIDER=termii` and the backend posts to Termii's `/api/send/template`; the Meta
+token, phone number id and templates are then unused. Meta stays the default.
+
+1. In the Termii dashboard (`accounts.termii.com/#/devices`), link the WhatsApp Business number and
+   copy its device id into `TERMII_WHATSAPP_DEVICE_ID`.
+2. Submit three **Utility** templates in the Termii WhatsApp template builder. Their placeholders are
+   written `<%1%>`, `<%2%>`, `<%3%>` and are filled from `data` keys `"1"`, `"2"`, `"3"` in that
+   order. Keep the same variable order as the Meta templates above:
+   - registration: voter name, election title, Voter ID
+   - vote confirmation: voter name, election title, submission time
+   - declared results: voter name, election title, results link
+3. Set `TERMII_API_KEY` (the same key as SMS), `TERMII_WHATSAPP_DEVICE_ID`,
+   `TERMII_WHATSAPP_REGISTRATION_TEMPLATE_ID`, `TERMII_WHATSAPP_VOTE_CONFIRMATION_TEMPLATE_ID` and
+   `TERMII_WHATSAPP_RESULTS_TEMPLATE_ID` to the approved template ids. A WhatsApp OTP template is
+   optional: set `TERMII_WHATSAPP_OTP_TEMPLATE_ID` only if the on-screen code is replaced, and give
+   that template the code as its single variable.
+4. Keep recording `whatsapp_consent` in the register. WhatsApp is reported as unavailable and skipped
+   without consent; email and SMS still proceed.
+5. Prove each template with one real billable message to a consented committee number:
+
+   ```bash
+   cd backend
+   .venv/Scripts/python.exe scripts/check_delivery.py --to-whatsapp +2348012345678 --whatsapp-template registration
+   .venv/Scripts/python.exe scripts/check_delivery.py --to-whatsapp +2348012345678 --whatsapp-template vote_confirmation
+   .venv/Scripts/python.exe scripts/check_delivery.py --to-whatsapp +2348012345678 --whatsapp-template results
+   ```
+
+The signed Meta status webhook at `/api/webhooks/whatsapp` applies only to `WHATSAPP_PROVIDER=meta`;
+Termii delivery receipts stay in the Termii dashboard. WhatsApp counts as configured only once the
+device id and the approved ids for the notices in use exist. `scripts/test_whatsapp_termii.py`
+checks the payloads against a local mock of the Termii endpoint without sending anything.
 
 ### Production guard and preflight
 

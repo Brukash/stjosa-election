@@ -24,6 +24,7 @@ from app.notifications import (  # noqa: E402
     _normalise_phone,
     mask_phone,
     send_registration_whatsapp,
+    whatsapp_template_reference,
 )
 
 EXPECTED_TEMPLATE = "sjc_registration_confirmation"
@@ -31,9 +32,18 @@ EXPECTED_LANGUAGE = "en_US"
 
 
 def _missing_settings() -> list[str]:
+    """Termii needs its own device and template ids; Meta needs its token pair."""
     missing: list[str] = []
-    if settings.whatsapp_provider.strip().lower() != "meta":
-        missing.append("WHATSAPP_PROVIDER=meta")
+    if settings.whatsapp_provider_key == "termii":
+        if not settings.termii_api_key:
+            missing.append("TERMII_API_KEY")
+        if not settings.termii_whatsapp_device_id:
+            missing.append("TERMII_WHATSAPP_DEVICE_ID")
+        if not settings.termii_whatsapp_registration_template_id:
+            missing.append("TERMII_WHATSAPP_REGISTRATION_TEMPLATE_ID")
+        return missing
+    if settings.whatsapp_provider_key != "meta":
+        missing.append("WHATSAPP_PROVIDER=meta or termii")
     if not settings.whatsapp_access_token:
         missing.append("WHATSAPP_ACCESS_TOKEN")
     if not settings.whatsapp_phone_number_id:
@@ -99,7 +109,8 @@ def main() -> int:
             print(f" - {name}", file=sys.stderr)
         return 2
 
-    if settings.whatsapp_registration_template_name != EXPECTED_TEMPLATE:
+    uses_meta = settings.whatsapp_provider_key == "meta"
+    if uses_meta and settings.whatsapp_registration_template_name != EXPECTED_TEMPLATE:
         print(
             f"This test only uses {EXPECTED_TEMPLATE!r}; the configured template is "
             f"{settings.whatsapp_registration_template_name!r}.",
@@ -107,7 +118,7 @@ def main() -> int:
         )
         return 2
 
-    if settings.whatsapp_registration_template_language != EXPECTED_LANGUAGE:
+    if uses_meta and settings.whatsapp_registration_template_language != EXPECTED_LANGUAGE:
         print(
             f"This test expects {EXPECTED_TEMPLATE!r} in {EXPECTED_LANGUAGE!r}; "
             f"the configured language is {settings.whatsapp_registration_template_language!r}.",
@@ -116,7 +127,10 @@ def main() -> int:
         return 2
 
     print("Registration WhatsApp test")
-    print(f"template: {settings.whatsapp_registration_template_name} ({settings.whatsapp_registration_template_language})")
+    print(f"provider: {settings.whatsapp_provider_key or 'none'}")
+    print(f"template: {whatsapp_template_reference('registration')}")
+    if uses_meta:
+        print(f"language: {settings.whatsapp_registration_template_language}")
     print(f"recipient: {mask_phone(destination)}")
 
     result = send_registration_whatsapp(

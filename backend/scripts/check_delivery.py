@@ -33,6 +33,7 @@ from app.notifications import (  # noqa: E402
     send_registration_whatsapp,
     send_results_whatsapp,
     send_vote_confirmation_whatsapp,
+    whatsapp_template_reference,
 )
 
 TEST_VOTER = "Delivery Test"
@@ -61,9 +62,9 @@ def main() -> int:
     print(f"email provider:    {settings.email_provider or 'none'}")
     print(f"sms provider:      {settings.sms_provider or 'none'}")
     print(f"whatsapp provider: {settings.whatsapp_provider or 'none'}")
-    print(f"registration tmpl: {settings.whatsapp_registration_template_name or 'none'}")
-    print(f"vote tmpl:         {settings.whatsapp_vote_confirmation_template_name or 'none'}")
-    print(f"results tmpl:      {settings.whatsapp_results_template_name or 'none'}")
+    print(f"registration tmpl: {whatsapp_template_reference('registration') or 'none'}")
+    print(f"vote tmpl:         {whatsapp_template_reference('vote_confirmation') or 'none'}")
+    print(f"results tmpl:      {whatsapp_template_reference('results') or 'none'}")
     print(f"on-screen OTP:     {'enabled (local development only)' if settings.expose_dev_otp else 'disabled'}")
     if settings.production_issues:
         print("\nProduction issues:")

@@ -255,6 +255,10 @@ class AccreditationSession(Base):
     election_id: Mapped[str] = mapped_column(ForeignKey("elections.id"), nullable=False, index=True)
     voter_row_id: Mapped[str] = mapped_column(ForeignKey("voters.id"), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    # Turnout marker chosen for this verification. It is copied to the voter row only
+    # when a credential is issued, so verifying the same Voter ID again cannot
+    # invalidate a credential that is already in the voter's hands.
+    turnout_token_hash: Mapped[str | None] = mapped_column(String(128))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

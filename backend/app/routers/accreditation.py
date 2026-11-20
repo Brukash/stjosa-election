@@ -120,11 +120,13 @@ def verify_voter(payload: VoterVerifyRequest, request: Request, db: Session = De
 
     session_token = secrets.token_hex(32)
     turnout_token = secrets.token_hex(32)
-    voter.turnout_token_hash = hashlib.sha256(turnout_token.encode()).hexdigest()
     db.add(AccreditationSession(
         election_id=election.id,
         voter_row_id=voter.id,
         token_hash=hashlib.sha256(session_token.encode()).hexdigest(),
+        # Held on the session, not written to the voter yet: a second verification
+        # must never overwrite the marker that an issued credential depends on.
+        turnout_token_hash=hashlib.sha256(turnout_token.encode()).hexdigest(),
         expires_at=now() + timedelta(minutes=20),
     ))
     db.add(ElectionEvent(
@@ -201,6 +203,12 @@ def request_credential(payload: CredentialRequest, request: Request, db: Session
         accreditation_id=accreditation.id,
         blinded_request_hash=blinded_hash,
     ))
+    # Only issuance binds the turnout marker to the voter. Because one active
+    # credential exists per Voter ID, this leaves exactly one usable marker and
+    # keeps the credential returned to the browser able to cast.
+    voter = db.get(Voter, session.voter_row_id)
+    if voter is not None and session.turnout_token_hash:
+        voter.turnout_token_hash = session.turnout_token_hash
     session.consumed_at = now()
     record_audit(
         db, action="credential.issued", election_id=election.id, entity="accreditation",
