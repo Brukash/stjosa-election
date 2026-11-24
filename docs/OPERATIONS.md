@@ -102,6 +102,8 @@ hourly message cap and its simultaneous-connection cap.
    | `SMTP_PASSWORD` | the mailbox password |
    | `SMTP_SSL` | `true` on port 465. On 587 set `SMTP_STARTTLS=true` and leave `SMTP_SSL` unset |
    | `SMTP_MAX_CONNECTIONS` | `3` (default); cPanel blocks mailboxes that open too many connections |
+   | `SMTP_SEND_DELAY_MS` | `500` (default); pause between messages in a notice batch |
+   | `SMTP_BATCH_SIZE` | `120` (default); notices sent per invocation, the remainder is reported as deferred |
 
    `EMAIL_FROM` must be that mailbox, or an alias on the same domain: cPanel refuses a sender it
    does not host. Remove `RESEND_API_KEY` once SMTP works so the deployment cannot fall back
@@ -119,10 +121,49 @@ hourly message cap and its simultaneous-connection cap.
    The report must say `sent <Message-ID>`. Then open `/admin/delivery` on the deployed API as the
    Super Administrator: Email must show the `smtp` provider and `configured: true`.
 
+**If notices fail after voting has begun.** Approval is refused once the register locks, so a
+delivery that fails during the approval batch can no longer be retried by approving again. Use
+**Resend unsent notices** on the register page (`POST /api/register/{election_id}/notifications/retry`,
+permission `register.approve`). It reuses the idempotent notifier: only voters whose notice was never
+delivered are sent again, the register itself is untouched, and the action is audited as
+`register.notify_retry`.
+
+**Result notices after a declaration.** Declaring the result emails every approved voter, so the same
+cap applies: the declaration response reports `email_deferred` for anyone not attempted in that run.
+Because a signed declaration cannot be re-declared, use **Resend unsent result notices** on the
+results page (`POST /api/results/{election_id}/notifications/retry`, permission `results.approve`,
+audited as `results.notify_retry`). It sends the current declaration only to voters with no recorded
+successful result email, never changes the declaration, and is safe to run repeatedly.
+
+**One member on demand.** When a voter reports that the notice never arrived, use **Resend to one
+member** on the register page: type the Voter ID or the email address and send. This is
+`POST /api/register/{election_id}/notifications/resend` (permission `register.approve`, audited as
+`register.notify_resend`). It emails that one voter even if a notice was already delivered, does not
+touch anyone else on the register, and is allowed after the lock. An unknown name, an address shared
+by two voters, or a voter who is not approved is refused with a message instead of sending.
+
+**How email is sent, for every notice.** All four messages the app sends — accreditation OTPs,
+registration notices, vote confirmations and declared results — go through one SMTP discipline:
+
+- **A shared pacer.** No two messages start closer together than `SMTP_SEND_DELAY_MS`, whichever
+  notice type or thread sends them. It queues rather than bursts, so the mailbox never sees a
+  back-to-back flood. Because it is app-wide, an OTP requested while a bulk run is in progress waits
+  behind the queue: keep bulk sends (approval or **Resend unsent notices**) out of the busiest voting
+  minutes, or lower the delay if OTPs feel slow.
+- **A shared connection cap.** `SMTP_MAX_CONNECTIONS` simultaneous connections at most, counted
+  across OTPs, vote confirmations and batches together.
+- **One session per batch.** Registration notices for one approval (or one **Resend unsent notices**
+  run) and the declared results for one declaration authenticate a single SMTP session and send
+  every message over it, instead of opening a connection per voter.
+- **A per-invocation cap.** At most `SMTP_BATCH_SIZE` bulk emails go out per invocation, so a
+  160-voter register is two runs rather than one long burst. Each voter's sent channel is recorded,
+  so the next run skips whoever already received theirs. If the host refuses the connection, the run
+  stops there and reports the rest as deferred instead of retrying it for every recipient.
+
 **Ask the host for two numbers.** The per-hour message limit for the domain (commonly 200–500/hour
 on shared hosting) and the simultaneous SMTP connection cap. 150 registration notices plus 150 vote
-confirmations is 300 messages: if the hourly cap is 200 or lower, approve the register in batches of
-about 50, since the app records each voter's sent channel and only retries the missing ones.
+confirmations is 300 messages: if the hourly cap is 200 or lower, lower `SMTP_BATCH_SIZE` so each run
+stays under it and repeat the action after the window resets.
 
 **Troubleshooting.**
 
@@ -133,6 +174,7 @@ about 50, since the app records each voter's sent channel and only retries the m
 | `smtp delivery failed: SMTPServerDisconnected` or timeout | Wrong host/port pairing — 465 with `SMTP_SSL=true`, or 587 with `SMTP_STARTTLS=true` |
 | Delivered but lands in spam | DKIM disabled or SPF missing in *Email Deliverability* |
 | `smtp delivery failed: SMTPRecipientsRefused` | The recipient's server rejected the address on the register |
+| `smtp delivery failed: ConnectionRefusedError` for every attempt in a batch | The host refused the burst (cPanel/Exim connection or per-hour cap). Wait 30–60 minutes, set `SMTP_MAX_CONNECTIONS=1`, then use **Resend unsent notices**; approval itself is refused once voting starts |
 
 ### Email — Resend (optional)
 

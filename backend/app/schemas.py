@@ -143,6 +143,12 @@ class WhatsAppConsentBulk(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class NotificationResend(BaseModel):
+    """One member's Voter ID or email address, for an on-demand notice resend."""
+
+    voter: str = Field(min_length=1, max_length=200)
+
+
 class VoterVerifyRequest(BaseModel):
     election_id: str | None = None
     voter_id: str

@@ -378,6 +378,8 @@ def main() -> None:
             "email_sent": 2,
             "email_failed": 1,
             "email_unavailable": 2,  # duplicate address + missing address
+            "email_already_sent": 0,
+            "email_deferred": 0,
             # This run configures email only; the SMS and WhatsApp senders are
             # checked directly below against the same mock provider.
             "sms_sent": 0,
@@ -525,6 +527,8 @@ def main() -> None:
                 "email_sent": 0,
                 "email_failed": 3,
                 "email_unavailable": 2,
+                "email_already_sent": 0,
+                "email_deferred": 0,
                 "sms_sent": 0,
                 "sms_failed": 0,
                 "sms_unavailable": 5,
@@ -549,6 +553,49 @@ def main() -> None:
             assert len(rows) == 6, len(rows)
             assert sum(1 for row in rows if row.status == "failed") == 4
         ok("a total provider outage raises nothing and leaves the declaration intact")
+
+        # ── the retry action finishes only the notices still missing ────────
+        # Two voters already have a delivered result and one never did. A retry
+        # must reach only the one still missing it, and a second retry must send
+        # nothing at all.
+        FAIL_ADDRESSES.clear()
+        retry_start = len(results_calls())
+        first_retry = client.post(
+            f"/api/results/{election_id}/notifications/retry", headers=chair
+        )
+        assert first_retry.status_code == 200, first_retry.text
+        first_retry_notices = first_retry.json()["notifications"]
+        assert first_retry.json()["version"] == 1, first_retry.json()
+        assert first_retry_notices["email_sent"] == 1, first_retry_notices
+        assert first_retry_notices["email_already_sent"] == 2, first_retry_notices
+        retry_calls = results_calls()[retry_start:]
+        assert [call["recipients"][0] for call in retry_calls] == [
+            "musa.rejected@example.test"
+        ], [call["recipients"] for call in retry_calls]
+        ok("a retry emails only the voters still missing the declared result")
+
+        second_start = len(results_calls())
+        second_retry = client.post(
+            f"/api/results/{election_id}/notifications/retry", headers=chair
+        )
+        assert second_retry.status_code == 200, second_retry.text
+        second_notices = second_retry.json()["notifications"]
+        assert second_notices["email_sent"] == 0, second_notices
+        assert second_notices["email_already_sent"] == 3, second_notices
+        assert len(results_calls()) == second_start, "a delivered voter was emailed again"
+        ok("a second retry sends nothing, so the action is idempotent")
+
+        with SessionLocal() as db:
+            retried_audit = db.execute(
+                select(AuditLog).where(
+                    AuditLog.election_id == election_id,
+                    AuditLog.action == "results.notify_retry",
+                )
+            ).scalars().all()
+            assert len(retried_audit) == 2, len(retried_audit)
+            stored_election = db.get(Election, election_id)
+            assert stored_election.status == "declared", stored_election.status
+        ok("the retry is audited and never changes the declared result")
 
     server.shutdown()
     server.server_close()

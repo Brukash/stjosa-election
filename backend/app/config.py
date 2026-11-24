@@ -77,6 +77,12 @@ class Settings:
     # Shared cPanel hosts cap simultaneous SMTP connections per mailbox, so
     # notification batches must not open one connection per worker.
     smtp_max_connections: int = _int("SMTP_MAX_CONNECTIONS", 3)
+    # A notification batch authenticates once and paces its messages over that
+    # one connection. The per-invocation cap keeps a 160-voter send from opening
+    # 160 connections or outliving the function's time limit; whatever the cap
+    # defers is reported back and sent by the next idempotent run.
+    smtp_send_delay_ms: int = _int("SMTP_SEND_DELAY_MS", 500)
+    smtp_batch_size: int = _int("SMTP_BATCH_SIZE", 120)
 
     # Termii is the required SMS gateway. Twilio remains available only as a
     # legacy fallback for deployments that have not migrated yet.

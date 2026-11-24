@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid, parseaddr
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -470,20 +471,33 @@ def _smtp_slots() -> threading.Semaphore:
         return _SMTP_SLOTS
 
 
-def _send_smtp(
-    destination: str,
-    subject: str,
-    body: str,
-    html_body: str | None = None,
-    *,
-    timeout_seconds: int | None = None,
-) -> tuple[str | None, str | None]:
-    """Send through an authenticated SMTP mailbox such as cPanel's.
+_SMTP_PACE_LOCK = threading.Lock()
+_SMTP_LAST_SEND = 0.0
 
-    Port 465 uses implicit TLS (SMTP_SSL); port 587 uses STARTTLS. The envelope
-    sender is EMAIL_FROM, which cPanel only accepts when the mailbox belongs to
-    the same account (or is an alias on that domain).
+
+def _smtp_pace() -> None:
+    """Space SMTP messages at least SMTP_SEND_DELAY_MS apart, app-wide.
+
+    Every notification path that sends email — OTPs, registration notices, vote
+    confirmations and declared results — shares this pacer, so the mailbox is
+    never hit with back-to-back messages from several threads or notice types
+    at once. Callers queue instead of bursting, and the delay is configurable
+    (0 disables it for a host that does not throttle message rate).
     """
+    global _SMTP_LAST_SEND
+    delay = max(0, settings.smtp_send_delay_ms) / 1000
+    if not delay:
+        return
+    with _SMTP_PACE_LOCK:
+        wait = _SMTP_LAST_SEND + delay - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _SMTP_LAST_SEND = time.monotonic()
+
+
+def _smtp_message(
+    destination: str, subject: str, body: str, html_body: str | None = None
+) -> EmailMessage:
     message = EmailMessage()
     display_name, address = parseaddr(settings.email_from)
     sender_address = address or settings.email_from
@@ -496,25 +510,92 @@ def _send_smtp(
     message.set_content(body)
     if html_body:
         message.add_alternative(html_body, subtype="html")
-    use_ssl = settings.smtp_ssl or settings.smtp_port == 465
-    try:
+    return message
+
+
+class _SmtpSession:
+    """One authenticated SMTP connection, reused for a batch of messages.
+
+    cPanel/Exim counts connections per mailbox and throttles one that opens
+    many of them quickly, so a notification batch authenticates once and sends
+    every message over that session instead of reconnecting per recipient.
+    Port 465 uses implicit TLS (SMTP_SSL); port 587 uses STARTTLS.
+    """
+
+    def __init__(self) -> None:
+        self.server: smtplib.SMTP | None = None
+        self.use_ssl = settings.smtp_ssl or settings.smtp_port == 465
+
+    def connect(self, *, timeout_seconds: int | None = None) -> None:
+        self.close()
         timeout = timeout_seconds or settings.otp_delivery_timeout_seconds
-        with _smtp_slots():
-            if use_ssl:
-                server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=timeout)
-            else:
-                server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=timeout)
-            with server:
+        if self.use_ssl:
+            server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=timeout)
+        else:
+            server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=timeout)
+        try:
+            server.ehlo()
+            if not self.use_ssl and settings.smtp_starttls:
+                server.starttls()
                 server.ehlo()
-                if not use_ssl and settings.smtp_starttls:
-                    server.starttls()
-                    server.ehlo()
-                if settings.smtp_username:
-                    server.login(settings.smtp_username, settings.smtp_password)
-                server.send_message(message)
-        return str(message["Message-ID"]), None
+            if settings.smtp_username:
+                server.login(settings.smtp_username, settings.smtp_password)
+        except (smtplib.SMTPException, OSError):
+            try:
+                server.close()
+            except (smtplib.SMTPException, OSError):
+                pass
+            raise
+        self.server = server
+
+    def close(self) -> None:
+        server, self.server = self.server, None
+        if server is None:
+            return
+        try:
+            server.quit()
+        except (smtplib.SMTPException, OSError):
+            try:
+                server.close()
+            except (smtplib.SMTPException, OSError):
+                pass
+
+    def send(self, message: EmailMessage) -> str:
+        if self.server is None:
+            raise smtplib.SMTPServerDisconnected("the SMTP session is not connected")
+        self.server.send_message(message)
+        return str(message["Message-ID"])
+
+
+def _send_smtp(
+    destination: str,
+    subject: str,
+    body: str,
+    html_body: str | None = None,
+    *,
+    timeout_seconds: int | None = None,
+) -> tuple[str | None, str | None]:
+    """Send one message through an authenticated SMTP mailbox such as cPanel's.
+
+    The envelope sender is EMAIL_FROM, which cPanel only accepts when the
+    mailbox belongs to the same account (or is an alias on that domain).
+    Batches use `_send_registration_email_batch` instead, so they authenticate
+    once rather than opening a connection per recipient.
+    """
+    message = _smtp_message(destination, subject, body, html_body)
+    session = _SmtpSession()
+    try:
+        # One message per call, but it still waits for the app-wide pacer and a
+        # shared connection slot so a burst of OTPs or vote confirmations can
+        # never exceed the mailbox's limits.
+        _smtp_pace()
+        with _smtp_slots():
+            session.connect(timeout_seconds=timeout_seconds)
+            return session.send(message), None
     except (smtplib.SMTPException, OSError) as exc:
         return None, f"smtp delivery failed: {type(exc).__name__}"
+    finally:
+        session.close()
 
 
 def _send_twilio(
@@ -788,6 +869,75 @@ def _send_registration_email(voter: Voter, election: Election) -> DeliveryResult
             message_id, error = None, "email provider is not configured"
     except Exception as exc:
         message_id, error = None, f"email delivery unavailable ({type(exc).__name__})"
+    return _email_result(provider, destination, message_id, error)
+
+
+def _send_smtp_batch(
+    prepared: list[tuple[Any, str, EmailMessage]],
+    *,
+    timeout_seconds: int | None = None,
+) -> tuple[list[tuple[DeliveryResult, Any]], int]:
+    """Send prepared messages over one authenticated SMTP session.
+
+    Every bulk notification type uses this: one connection, one shared
+    connection slot for the whole session, and the app-wide pacer between
+    messages, so a 160-voter run neither opens 160 connections nor arrives as a
+    burst. The caller caps how many go out in one invocation. If the host
+    refuses the connection the run stops there instead of retrying for every
+    remaining recipient; those messages are returned as a deferred count so the
+    same idempotent action can finish them later.
+    """
+    results: list[tuple[DeliveryResult, Any]] = []
+    deferred = 0
+    session = _SmtpSession()
+    try:
+        # Hold one of the shared connection slots for the whole batch, so a
+        # batch running beside an OTP or vote confirmation never pushes the
+        # mailbox past SMTP_MAX_CONNECTIONS.
+        with _smtp_slots():
+            for index, (item, destination, message) in enumerate(prepared):
+                if index:
+                    _smtp_pace()
+                if session.server is None:
+                    try:
+                        session.connect(timeout_seconds=timeout_seconds)
+                    except (smtplib.SMTPException, OSError) as exc:
+                        error = f"smtp delivery failed: {type(exc).__name__}"
+                        results.append((_email_result("smtp", destination, None, error), item))
+                        deferred = len(prepared) - index - 1
+                        break
+                try:
+                    message_id = session.send(message)
+                except (smtplib.SMTPException, OSError) as exc:
+                    error = f"smtp delivery failed: {type(exc).__name__}"
+                    results.append((_email_result("smtp", destination, None, error), item))
+                    # The socket may be dead; authenticate again for the next message.
+                    session.close()
+                    continue
+                results.append((_email_result("smtp", destination, message_id, None), item))
+    finally:
+        session.close()
+    return results, deferred
+
+
+def _send_registration_email_batch(
+    voters: list[Voter], election: Election
+) -> tuple[list[tuple[DeliveryResult, Voter]], int]:
+    """Send registration emails over one authenticated SMTP connection."""
+    prepared: list[tuple[Voter, str, EmailMessage]] = []
+    for voter in voters:
+        destination = (voter.email or "").strip()
+        subject, text, html_body = _registration_email_body(election, voter)
+        prepared.append(
+            (voter, destination, _smtp_message(destination, subject, text, html_body))
+        )
+    return _send_smtp_batch(prepared)
+
+
+def _email_result(
+    provider: str, destination: str, message_id: str | None, error: str | None
+) -> DeliveryResult:
+    """The one DeliveryResult shape for every email attempt."""
     return DeliveryResult(
         channel="email",
         provider=provider or "none",
@@ -796,6 +946,19 @@ def _send_registration_email(voter: Voter, election: Election) -> DeliveryResult
         provider_message_id=message_id,
         error=error,
     )
+
+
+def _worker_result(future, channel: str) -> DeliveryResult:
+    try:
+        return future.result()
+    except Exception as exc:
+        return DeliveryResult(
+            channel=channel,
+            provider="unknown",
+            status="failed",
+            recipient_masked="***",
+            error=f"notification worker failed ({type(exc).__name__})",
+        )
 
 
 def send_registration_whatsapp(
@@ -892,6 +1055,7 @@ def notify_registered_voters(
         "email_failed": 0,
         "email_unavailable": 0,
         "email_already_sent": 0,
+        "email_deferred": 0,
         "sms_sent": 0,
         "sms_failed": 0,
         "sms_unavailable": 0,
@@ -936,58 +1100,128 @@ def notify_registered_voters(
     if not attempts:
         return summary
 
-    with ThreadPoolExecutor(max_workers=min(8, len(attempts))) as executor:
-        futures = {}
-        for channel, voter, destination in attempts:
-            if channel == "email":
-                futures[executor.submit(_send_registration_email, voter, election)] = (channel, voter)
-            elif channel == "sms":
-                futures[executor.submit(_send_registration_sms, voter, election, destination)] = (
-                    channel,
-                    voter,
+    email_attempts = [
+        (voter, destination) for channel, voter, destination in attempts if channel == "email"
+    ]
+    other_attempts = [attempt for attempt in attempts if attempt[0] != "email"]
+    results: list[tuple[str, Voter, DeliveryResult]] = []
+    deferred = 0
+
+    if email_attempts:
+        if _email_provider() == "smtp":
+            # One authenticated connection carries the batch: cPanel counts and
+            # throttles connections per mailbox, so reconnecting per recipient is
+            # what turned a 160-voter send into a refused burst. The cap keeps a
+            # single invocation inside the function's time limit; whatever is left
+            # is reported as deferred and sent by the next idempotent run.
+            batch = email_attempts[: max(1, settings.smtp_batch_size)]
+            deferred = len(email_attempts) - len(batch)
+            if batch:
+                batch_results, refused_by_host = _send_registration_email_batch(
+                    [voter for voter, _ in batch], election
                 )
-            else:
-                futures[executor.submit(_send_registration_whatsapp, voter, election, destination)] = (
-                    channel, voter
-                )
-        for future, (channel, voter) in futures.items():
-            try:
-                result = future.result()
-            except Exception as exc:
-                result = DeliveryResult(
-                    channel=channel,
-                    provider="unknown",
-                    status="failed",
-                    recipient_masked="***",
-                    error=f"notification worker failed ({type(exc).__name__})",
-                )
-            if result.status == "sent":
-                summary[f"{channel}_sent"] += 1
-                if channel == "email":
-                    voter.registration_email_sent_at = now()
-                elif channel == "sms":
-                    voter.registration_sms_sent_at = now()
+                deferred += refused_by_host
+                results.extend(("email", voter, result) for result, voter in batch_results)
+        else:
+            with ThreadPoolExecutor(max_workers=min(8, len(email_attempts))) as executor:
+                futures = {
+                    executor.submit(_send_registration_email, voter, election): voter
+                    for voter, _ in email_attempts
+                }
+                for future, voter in futures.items():
+                    results.append(("email", voter, _worker_result(future, "email")))
+
+    if other_attempts:
+        with ThreadPoolExecutor(max_workers=min(8, len(other_attempts))) as executor:
+            futures = {}
+            for channel, voter, destination in other_attempts:
+                if channel == "sms":
+                    futures[executor.submit(_send_registration_sms, voter, election, destination)] = (
+                        channel,
+                        voter,
+                    )
                 else:
-                    voter.registration_whatsapp_sent_at = now()
+                    futures[
+                        executor.submit(_send_registration_whatsapp, voter, election, destination)
+                    ] = (channel, voter)
+            for future, (channel, voter) in futures.items():
+                results.append((channel, voter, _worker_result(future, channel)))
+
+    summary["email_deferred"] = deferred
+    for channel, voter, result in results:
+        if result.status == "sent":
+            summary[f"{channel}_sent"] += 1
+            if channel == "email":
+                voter.registration_email_sent_at = now()
+            elif channel == "sms":
+                voter.registration_sms_sent_at = now()
             else:
-                summary[f"{channel}_failed"] += 1
-            db.add(
-                NotificationDelivery(
-                    election_id=election.id,
-                    voter_row_id=voter.id,
-                    challenge_id=None,
-                    purpose="registration",
-                    channel=result.channel,
-                    provider=result.provider,
-                    status=result.status,
-                    recipient_masked=result.recipient_masked,
-                    provider_message_id=result.provider_message_id,
-                    error=(result.error or "")[:300] or None,
-                    request_ip=request_ip,
-                )
+                voter.registration_whatsapp_sent_at = now()
+        else:
+            summary[f"{channel}_failed"] += 1
+        db.add(
+            NotificationDelivery(
+                election_id=election.id,
+                voter_row_id=voter.id,
+                challenge_id=None,
+                purpose="registration",
+                channel=result.channel,
+                provider=result.provider,
+                status=result.status,
+                recipient_masked=result.recipient_masked,
+                provider_message_id=result.provider_message_id,
+                error=(result.error or "")[:300] or None,
+                request_ip=request_ip,
             )
+        )
     db.commit()
     return summary
+
+
+def resend_registration_email(
+    db: Session,
+    *,
+    election: Election,
+    voter: Voter,
+    request_ip: str | None = None,
+) -> DeliveryResult:
+    """Send one voter's registration email again, even if a notice went out before.
+
+    A member may have missed the notice — spam, a full mailbox, or a host
+    refusal during a batch — and the register cannot be re-approved once voting
+    starts. This sends only that voter's email, over the same paced SMTP path a
+    batch uses, records the attempt, and refreshes the sent timestamp only when
+    the provider confirmed the message.
+    """
+    destination = (voter.email or "").strip()
+    if not destination:
+        return _email_result(
+            _email_provider(), "", None, "no email address is registered for this voter"
+        )
+    if not settings.email_configured:
+        return _email_result(
+            _email_provider(), destination, None, "email delivery is not configured"
+        )
+    result = _send_registration_email(voter, election)
+    if result.status == "sent":
+        voter.registration_email_sent_at = now()
+    db.add(
+        NotificationDelivery(
+            election_id=election.id,
+            voter_row_id=voter.id,
+            challenge_id=None,
+            purpose="registration",
+            channel=result.channel,
+            provider=result.provider,
+            status=result.status,
+            recipient_masked=result.recipient_masked,
+            provider_message_id=result.provider_message_id,
+            error=(result.error or "")[:300] or None,
+            request_ip=request_ip,
+        )
+    )
+    db.commit()
+    return result
 
 
 # ── vote-submitted confirmations ──────────────────────────────────────────────
@@ -1080,14 +1314,7 @@ def _send_vote_confirmation_email(
             message_id, error = None, "email provider is not configured"
     except Exception as exc:
         message_id, error = None, f"email delivery unavailable ({type(exc).__name__})"
-    return DeliveryResult(
-        channel="email",
-        provider=provider or "none",
-        status="failed" if error else "sent",
-        recipient_masked=mask_email(destination),
-        provider_message_id=message_id,
-        error=error,
-    )
+    return _email_result(provider, destination, message_id, error)
 
 
 def send_vote_confirmation_whatsapp(
@@ -1518,13 +1745,38 @@ def _send_results_email(
             message_id, error = None, "email provider is not configured"
     except Exception as exc:
         message_id, error = None, f"email delivery unavailable ({type(exc).__name__})"
-    return DeliveryResult(
-        channel="email",
-        provider=provider or "none",
-        status="failed" if error else "sent",
-        recipient_masked=mask_email(destination),
-        provider_message_id=message_id,
-        error=error,
+    return _email_result(provider, destination, message_id, error)
+
+
+def _send_results_email_batch(
+    recipients: list[tuple[Voter, str]],
+    *,
+    election_title: str,
+    election_reference: str,
+    declared_label: str,
+    version: int,
+    results_url: str,
+    lines: list[tuple[str, str]],
+    totals: dict,
+) -> tuple[list[tuple[DeliveryResult, Voter]], int]:
+    """Send declared-result emails over one authenticated SMTP connection."""
+    prepared: list[tuple[Voter, str, EmailMessage]] = []
+    for voter, destination in recipients:
+        subject, text, html_body = _results_email_body(
+            election_title=election_title,
+            election_reference=election_reference,
+            voter_name=voter.full_name,
+            declared_label=declared_label,
+            version=version,
+            results_url=results_url,
+            lines=lines,
+            totals=totals,
+        )
+        prepared.append(
+            (voter, destination, _smtp_message(destination, subject, text, html_body))
+        )
+    return _send_smtp_batch(
+        prepared, timeout_seconds=settings.vote_confirmation_timeout_seconds
     )
 
 
@@ -1636,6 +1888,7 @@ def notify_results_declared(
     declared_at: datetime,
     version: int,
     request_ip: str | None = None,
+    skip_delivered: bool = False,
 ) -> dict:
     """Send the declared result to every approved voter on every channel.
 
@@ -1644,12 +1897,21 @@ def notify_results_declared(
     The declaration is already committed when this runs, so a slow or failing
     provider can never roll it back. Each voter receives an individual message
     (never a shared recipient list) containing only the official public figures.
+
+    Results go to the whole register at once, so email uses the same discipline
+    as registration notices: one authenticated SMTP session for the batch, the
+    app-wide pacer between messages, and at most SMTP_BATCH_SIZE emails per
+    invocation. Any remainder is reported as `email_deferred` and finished by
+    the retry action, which passes `skip_delivered=True` so a voter who already
+    received the result is never emailed twice.
     """
     summary = {
         "voters": 0,
         "email_sent": 0,
         "email_failed": 0,
         "email_unavailable": 0,
+        "email_already_sent": 0,
+        "email_deferred": 0,
         "sms_sent": 0,
         "sms_failed": 0,
         "sms_unavailable": 0,
@@ -1666,6 +1928,22 @@ def notify_results_declared(
         ).order_by(Voter.full_name)
     ).scalars().all()
     summary["voters"] = len(voters)
+    already_emailed: set[str] = set()
+    if skip_delivered:
+        # A successful email delivery row is the record that this voter already
+        # has the declared result, so a retry only reaches the ones still missing it.
+        already_emailed = {
+            row
+            for row in db.execute(
+                select(NotificationDelivery.voter_row_id).where(
+                    NotificationDelivery.election_id == election.id,
+                    NotificationDelivery.purpose == "results_declared",
+                    NotificationDelivery.channel == "email",
+                    NotificationDelivery.status == "sent",
+                )
+            ).scalars()
+            if row
+        }
     lines = _result_lines(figures)
     totals = figures.get("totals") or {}
     declared_label = _vote_submitted_label(election, declared_at)
@@ -1680,8 +1958,13 @@ def notify_results_declared(
         if not email or not settings.email_configured or email.lower() in seen_email:
             summary["email_unavailable"] += 1
         else:
+            # The address counts as seen even when this voter already has the
+            # result, so a duplicate on the register never gets a second copy.
             seen_email.add(email.lower())
-            attempts.append(("email", voter, email))
+            if voter.id in already_emailed:
+                summary["email_already_sent"] += 1
+            else:
+                attempts.append(("email", voter, email))
 
         phone = _normalise_phone(voter.phone or "")
         if not phone or not settings.sms_configured or phone in seen_phone:
@@ -1703,11 +1986,35 @@ def notify_results_declared(
     if not attempts:
         return summary
 
-    with ThreadPoolExecutor(max_workers=min(8, len(attempts))) as executor:
-        futures: dict = {}
-        for channel, voter, destination in attempts:
-            if channel == "email":
-                futures[
+    email_attempts = [
+        (voter, destination) for channel, voter, destination in attempts if channel == "email"
+    ]
+    other_attempts = [attempt for attempt in attempts if attempt[0] != "email"]
+    results: list[tuple[str, Voter, DeliveryResult]] = []
+    deferred = 0
+
+    if email_attempts:
+        if _email_provider() == "smtp":
+            # Declaring results emails the whole register at once: one
+            # authenticated session, the shared pacer, and a cap per invocation.
+            batch = email_attempts[: max(1, settings.smtp_batch_size)]
+            deferred = len(email_attempts) - len(batch)
+            if batch:
+                batch_results, refused_by_host = _send_results_email_batch(
+                    batch,
+                    election_title=election.title,
+                    election_reference=election.reference,
+                    declared_label=declared_label,
+                    version=version,
+                    results_url=results_url,
+                    lines=lines,
+                    totals=totals,
+                )
+                deferred += refused_by_host
+                results.extend(("email", voter, result) for result, voter in batch_results)
+        else:
+            with ThreadPoolExecutor(max_workers=min(8, len(email_attempts))) as executor:
+                futures = {
                     executor.submit(
                         _send_results_email,
                         destination,
@@ -1719,57 +2026,59 @@ def notify_results_declared(
                         results_url=results_url,
                         lines=lines,
                         totals=totals,
-                    )
-                ] = (channel, voter)
-            elif channel == "sms":
-                futures[
-                    executor.submit(
-                        send_results_sms,
-                        election_reference=election.reference,
-                        results_url=results_url,
-                        destination=destination,
-                    )
-                ] = (channel, voter)
-            else:
-                futures[
-                    executor.submit(
-                        send_results_whatsapp,
-                        voter_name=voter.full_name,
-                        election_title=election.title,
-                        results_url=results_url,
-                        destination=destination,
-                    )
-                ] = (channel, voter)
-        for future, (channel, voter) in futures.items():
-            try:
-                result = future.result()
-            except Exception as exc:
-                result = DeliveryResult(
-                    channel=channel,
-                    provider="unknown",
-                    status="failed",
-                    recipient_masked="***",
-                    error=f"notification worker failed ({type(exc).__name__})",
-                )
-            if result.status == "sent":
-                summary["email_sent"] += 1
-            else:
-                summary["email_failed"] += 1
-            db.add(
-                NotificationDelivery(
-                    election_id=election.id,
-                    voter_row_id=voter.id,
-                    challenge_id=None,
-                    purpose="results_declared",
-                    channel=result.channel,
-                    provider=result.provider,
-                    status=result.status,
-                    recipient_masked=result.recipient_masked,
-                    provider_message_id=result.provider_message_id,
-                    error=(result.error or "")[:300] or None,
-                    request_ip=request_ip,
-                )
+                    ): voter
+                    for voter, destination in email_attempts
+                }
+                for future, voter in futures.items():
+                    results.append(("email", voter, _worker_result(future, "email")))
+
+    if other_attempts:
+        with ThreadPoolExecutor(max_workers=min(8, len(other_attempts))) as executor:
+            futures = {}
+            for channel, voter, destination in other_attempts:
+                if channel == "sms":
+                    futures[
+                        executor.submit(
+                            send_results_sms,
+                            election_reference=election.reference,
+                            results_url=results_url,
+                            destination=destination,
+                        )
+                    ] = (channel, voter)
+                else:
+                    futures[
+                        executor.submit(
+                            send_results_whatsapp,
+                            voter_name=voter.full_name,
+                            election_title=election.title,
+                            results_url=results_url,
+                            destination=destination,
+                        )
+                    ] = (channel, voter)
+            for future, (channel, voter) in futures.items():
+                results.append((channel, voter, _worker_result(future, channel)))
+
+    summary["email_deferred"] = deferred
+    for channel, voter, result in results:
+        if result.status == "sent":
+            summary[f"{channel}_sent"] += 1
+        else:
+            summary[f"{channel}_failed"] += 1
+        db.add(
+            NotificationDelivery(
+                election_id=election.id,
+                voter_row_id=voter.id,
+                challenge_id=None,
+                purpose="results_declared",
+                channel=result.channel,
+                provider=result.provider,
+                status=result.status,
+                recipient_masked=result.recipient_masked,
+                provider_message_id=result.provider_message_id,
+                error=(result.error or "")[:300] or None,
+                request_ip=request_ip,
             )
+        )
     db.commit()
     return summary
 

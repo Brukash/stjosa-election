@@ -14,6 +14,22 @@ import {
   shortHash,
 } from "@/lib/api";
 
+function noticeSummary(n: any) {
+  if (!n || typeof n.email_sent !== "number") return "";
+  const deferred = n.email_deferred
+    ? ` ${n.email_deferred} notice(s) were not attempted in this run — choose "Resend unsent result notices" to send them.`
+    : "";
+  return (
+    deferred +
+    ` Voter result notices — Email: ${n.email_sent} sent, ${n.email_failed} failed,` +
+    ` ${n.email_unavailable} unavailable.` +
+    ` SMS: ${n.sms_sent ?? 0} sent, ${n.sms_failed ?? 0} failed,` +
+    ` ${n.sms_unavailable ?? 0} unavailable.` +
+    ` WhatsApp: ${n.whatsapp_sent ?? 0} sent, ${n.whatsapp_failed ?? 0} failed,` +
+    ` ${(n.whatsapp_unavailable ?? 0) + (n.whatsapp_no_consent ?? 0)} unavailable.`
+  );
+}
+
 export default function ResultsAdminPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -58,16 +74,7 @@ export default function ResultsAdminPage() {
     setError("");
     try {
       const declaration = await api(`/api/results/${id}/approve`, { method: "POST", auth: true });
-      const delivered = declaration?.voter_notifications;
-      const emails =
-        delivered && typeof delivered.email_sent === "number"
-          ? ` Voter result notices — Email: ${delivered.email_sent} sent, ${delivered.email_failed} failed,` +
-            ` ${delivered.email_unavailable} unavailable.` +
-            ` SMS: ${delivered.sms_sent ?? 0} sent, ${delivered.sms_failed ?? 0} failed,` +
-            ` ${delivered.sms_unavailable ?? 0} unavailable.` +
-            ` WhatsApp: ${delivered.whatsapp_sent ?? 0} sent, ${delivered.whatsapp_failed ?? 0} failed,` +
-            ` ${(delivered.whatsapp_unavailable ?? 0) + (delivered.whatsapp_no_consent ?? 0)} unavailable.`
-          : "";
+      const emails = noticeSummary(declaration?.voter_notifications);
       const solo = declaration?.single_official_declaration
         ? " Recorded as a single-official declaration: the same account submitted and declared."
         : "";
@@ -77,6 +84,23 @@ export default function ResultsAdminPage() {
     } catch (err: any) {
       setError(err.message);
       if (err?.status === 409) load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendNotices() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api(`/api/results/${id}/notifications/retry`, {
+        method: "POST",
+        auth: true,
+      });
+      setNotice(noticeSummary(result?.notifications));
+      load();
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -268,6 +292,22 @@ export default function ResultsAdminPage() {
             ))}
           </div>
         )}
+
+        {current && can(profile, "results.approve") ? (
+          <div className="mt-5 rounded-xl border border-rule p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-ink">Result notices</p>
+                <p className="mt-0.5 text-xs text-ink/50">
+                  Sends version {current.version} only to voters whose email did not go out.
+                </p>
+              </div>
+              <button className="btn-outline" onClick={resendNotices} disabled={busy}>
+                Resend unsent result notices
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {status === "declared" && can(profile, "results.approve") ? (
           <form onSubmit={correct} className="mt-5 space-y-3 rounded-xl border border-dashed border-rule p-4">

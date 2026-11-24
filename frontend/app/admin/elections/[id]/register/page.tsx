@@ -19,6 +19,22 @@ const EMPTY_VOTER = {
   is_eligible: true,
 };
 
+function deliverySummary(n: any) {
+  if (!n) return "";
+  const deferred = n.email_deferred
+    ? ` ${n.email_deferred} notice(s) were not attempted in this run — run this action again to send them.`
+    : "";
+  return (
+    deferred +
+    ` Email: ${n.email_sent ?? 0} sent, ${n.email_failed ?? 0} failed, ` +
+    `${n.email_unavailable ?? 0} unavailable. ` +
+    `SMS: ${n.sms_sent ?? 0} sent, ${n.sms_failed ?? 0} failed, ` +
+    `${n.sms_unavailable ?? 0} unavailable. ` +
+    `WhatsApp: ${n.whatsapp_sent ?? 0} sent, ${n.whatsapp_failed ?? 0} failed, ` +
+    `${(n.whatsapp_unavailable ?? 0) + (n.whatsapp_no_consent ?? 0)} unavailable.`
+  );
+}
+
 export default function RegisterPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -30,6 +46,7 @@ export default function RegisterPage() {
   const [popup, setPopup] = useState<{ title: string; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
+  const [resendTarget, setResendTarget] = useState("");
   const [voterForm, setVoterForm] = useState({ ...EMPTY_VOTER });
   const [consentSelection, setConsentSelection] = useState<Set<string>>(new Set());
   const [consentSource, setConsentSource] = useState("");
@@ -122,19 +139,71 @@ export default function RegisterPage() {
     try {
       const result = await api(`/api/register/${id}/approve`, { method: "POST", auth: true });
       const n = result.notifications;
-      const delivery = n
-        ? ` Email: ${n.email_sent ?? 0} sent, ${n.email_failed ?? 0} failed, ` +
-          `${n.email_unavailable ?? 0} unavailable. ` +
-          `SMS: ${n.sms_sent ?? 0} sent, ${n.sms_failed ?? 0} failed, ` +
-          `${n.sms_unavailable ?? 0} unavailable. ` +
-          `WhatsApp: ${n.whatsapp_sent ?? 0} sent, ${n.whatsapp_failed ?? 0} failed, ` +
-          `${(n.whatsapp_unavailable ?? 0) + (n.whatsapp_no_consent ?? 0)} unavailable.`
-        : "";
+      const delivery = deliverySummary(n);
       if (n?.error) setError(`Register approved, but ${n.error}.`);
       setPopup({
         title: "Register approved",
         message: `${result.approved} voter(s) approved; ${result.excluded} excluded.${delivery}`,
       });
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendNotices() {
+    setBusy(true);
+    setError("");
+    setPopup(null);
+    try {
+      const result = await api(`/api/register/${id}/notifications/retry`, {
+        method: "POST",
+        auth: true,
+      });
+      const n = result.notifications;
+      if (n?.error) setError(`Registration notices were not sent: ${n.error}.`);
+      setPopup({
+        title: "Registration notices retried",
+        message:
+          `${result.voters} approved voter(s) checked.` +
+          (result.register_locked
+            ? " The register is locked, so only notices that had not been delivered were sent."
+            : " Notices that had already been delivered were skipped.") +
+          deliverySummary(n),
+      });
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendOne(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setPopup(null);
+    try {
+      const result = await api(`/api/register/${id}/notifications/resend`, {
+        method: "POST",
+        auth: true,
+        body: JSON.stringify({ voter: resendTarget.trim() }),
+      });
+      if (result.delivery?.status === "sent") {
+        setPopup({
+          title: "Registration email resent",
+          message: `${result.voter.full_name} (${result.voter.voter_id}) — sent to ${result.voter.email}.`,
+        });
+        setResendTarget("");
+      } else {
+        setError(
+          `The email to ${result.voter.full_name} (${result.voter.voter_id}) was not delivered: ` +
+            `${result.delivery?.error ?? "unknown error"}. Try again in a few minutes.`,
+        );
+      }
       load();
     } catch (err: any) {
       setError(err.message);
@@ -368,6 +437,40 @@ export default function RegisterPage() {
             <button className="btn-dark mt-4 w-full" onClick={approveRegister} disabled={busy}>
               Approve register
             </button>
+          ) : null}
+          {canApprove && data.election.register_approved ? (
+            <>
+              <button className="btn-ghost mt-3 w-full" onClick={resendNotices} disabled={busy}>
+                {busy ? "Sending…" : "Resend unsent notices"}
+              </button>
+              <p className="mt-2 text-xs text-ink/45">
+                Sends only to voters whose registration notice was not delivered. Safe after the
+                register locks, because it never changes who is registered.
+              </p>
+            </>
+          ) : null}
+          {canApprove ? (
+            <form onSubmit={resendOne} className="mt-5 rounded-lg border border-rule p-4">
+              <label className="label" htmlFor="resend-voter">
+                Resend to one member
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  id="resend-voter"
+                  className="input min-w-[180px] flex-1"
+                  value={resendTarget}
+                  onChange={(event) => setResendTarget(event.target.value)}
+                  placeholder="Voter ID or email address"
+                />
+                <button className="btn-outline" disabled={busy || !resendTarget.trim()}>
+                  {busy ? "Sending…" : "Resend email"}
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-ink/45">
+                Sends only this voter&apos;s registration email. Use it when a member reports the
+                notice never arrived or a send failed. Safe after the register locks.
+              </p>
+            </form>
           ) : null}
           <div className="mt-5">
             <label className="label">Search voters</label>

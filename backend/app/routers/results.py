@@ -377,6 +377,53 @@ def approve_and_declare(
     return payload
 
 
+@router.post("/{election_id}/notifications/retry")
+def retry_result_notices(
+    election_id: str,
+    request: Request,
+    profile: Profile = Depends(require_permission("results.approve")),
+    db: Session = Depends(get_db),
+):
+    """Send the declared-result notices that are still missing.
+
+    A single invocation emails at most SMTP_BATCH_SIZE voters, so a large
+    register leaves the rest deferred. The declaration is already signed and
+    cannot be re-declared, so this action finishes those notices without
+    touching it and without emailing a voter who already received the result.
+    """
+    election = get_election(db, election_id)
+    declaration = db.execute(
+        select(ResultDeclaration).where(
+            ResultDeclaration.election_id == election.id,
+            ResultDeclaration.is_current.is_(True),
+        )
+    ).scalars().first()
+    if not declaration:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Official results have not been declared yet"
+        )
+    try:
+        notifications = notify_results_declared(
+            db,
+            election=election,
+            figures=declaration.figures,
+            declared_at=declaration.declared_at,
+            version=declaration.version,
+            request_ip=client_ip(request),
+            skip_delivered=True,
+        )
+    except Exception as exc:
+        db.rollback()
+        notifications = {"error": f"result notices failed ({type(exc).__name__})"}
+    record_audit(
+        db, action="results.notify_retry", election_id=election.id, actor_id=profile.id,
+        entity="result_declaration", entity_id=declaration.id,
+        ip_address=client_ip(request), detail=notifications,
+    )
+    db.commit()
+    return {"version": declaration.version, "notifications": notifications}
+
+
 @router.post("/{election_id}/corrections")
 def correct_declaration(
     election_id: str,

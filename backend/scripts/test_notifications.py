@@ -14,6 +14,7 @@ import secrets
 import sys
 import tempfile
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -55,12 +56,15 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 
 from app import crypto  # noqa: E402
+from app import notifications as notifications_module  # noqa: E402
+from app.config import settings  # noqa: E402
 from app.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     AccreditationRecord,
     AccreditationSession,
     AuditLog,
+    Election,
     NotificationDelivery,
     Voter,
 )
@@ -272,7 +276,223 @@ def main() -> None:
         assert again_notice["whatsapp_no_consent"] == 1, again_notice
         ok("repeated register approval does not resend successful notices")
 
-        # ── 6. read boundaries and provider readiness ────────────────────────
+        # ── 6. a locked register can still resend undelivered notices ────────
+        with SessionLocal() as db:
+            election_row = db.get(Election, election_id)
+            assert election_row is not None
+            election_row.locked_at = datetime.now(timezone.utc)  # the first ballot was cast
+            failed_voter = db.execute(
+                select(Voter).where(
+                    Voter.election_id == election_id,
+                    Voter.is_eligible.is_(True),
+                    Voter.register_status == "approved",
+                    Voter.registration_email_sent_at.is_not(None),
+                )
+            ).scalars().first()
+            assert failed_voter is not None
+            failed_voter.registration_email_sent_at = None  # a notice that never arrived
+            db.commit()
+
+        locked_approve = client.post(f"/api/register/{election_id}/approve", headers=chair_headers)
+        assert locked_approve.status_code == 409, locked_approve.text
+
+        retry_start = len(CAPTURED)
+        retried = client.post(
+            f"/api/register/{election_id}/notifications/retry", headers=chair_headers
+        )
+        assert retried.status_code == 200, retried.text
+        retry_body = retried.json()
+        assert retry_body["register_locked"] is True, retry_body
+        retry_notices = retry_body["notifications"]
+        assert retry_notices["email_sent"] == 1, retry_notices
+        assert retry_notices["email_already_sent"] == eligible - 1, retry_notices
+        assert retry_notices["sms_already_sent"] == eligible, retry_notices
+        retry_calls = CAPTURED[retry_start:]
+        assert len(retry_calls) == 1, [call["path"] for call in retry_calls]
+        ok("a locked register still resends only the notices that were not delivered")
+
+        # ── 7. one member can be resent on demand ──────────────────────────
+        with SessionLocal() as db:
+            every_email = [
+                (voter.email or "").strip().lower()
+                for voter in db.execute(
+                    select(Voter).where(Voter.election_id == election_id)
+                ).scalars()
+            ]
+            candidates = db.execute(
+                select(Voter).where(
+                    Voter.election_id == election_id,
+                    Voter.is_eligible.is_(True),
+                    Voter.register_status == "approved",
+                    Voter.registration_email_sent_at.is_not(None),
+                    Voter.email.is_not(None),
+                )
+            ).scalars().all()
+            target = next(
+                voter
+                for voter in candidates
+                if every_email.count((voter.email or "").strip().lower()) == 1
+            )
+            target_row_id = target.id
+            target_voter_id = target.voter_id
+            target_email = (target.email or "").strip()
+            deliveries_before = db.scalar(
+                select(func.count(NotificationDelivery.id)).where(
+                    NotificationDelivery.election_id == election_id,
+                    NotificationDelivery.voter_row_id == target_row_id,
+                    NotificationDelivery.purpose == "registration",
+                    NotificationDelivery.channel == "email",
+                )
+            )
+
+        resend_start = len(CAPTURED)
+        resent = client.post(
+            f"/api/register/{election_id}/notifications/resend",
+            headers=chair_headers,
+            json={"voter": target_voter_id},
+        )
+        assert resent.status_code == 200, resent.text
+        resent_body = resent.json()
+        assert resent_body["voter"]["voter_id"] == target_voter_id, resent_body
+        assert resent_body["delivery"]["status"] == "sent", resent_body
+        assert [call["path"] for call in CAPTURED[resend_start:]] == ["/emails"], [
+            call["path"] for call in CAPTURED[resend_start:]
+        ]
+        with SessionLocal() as db:
+            deliveries_after = db.scalar(
+                select(func.count(NotificationDelivery.id)).where(
+                    NotificationDelivery.election_id == election_id,
+                    NotificationDelivery.voter_row_id == target_row_id,
+                    NotificationDelivery.purpose == "registration",
+                    NotificationDelivery.channel == "email",
+                )
+            )
+            assert deliveries_after == deliveries_before + 1, (
+                deliveries_before,
+                deliveries_after,
+            )
+        ok("the resend field sends one member's registration email again")
+
+        by_email = client.post(
+            f"/api/register/{election_id}/notifications/resend",
+            headers=chair_headers,
+            json={"voter": target_email},
+        )
+        assert by_email.status_code == 200, by_email.text
+        assert by_email.json()["voter"]["voter_id"] == target_voter_id, by_email.text
+        ok("the resend field also finds a member by email address")
+
+        unknown = client.post(
+            f"/api/register/{election_id}/notifications/resend",
+            headers=chair_headers,
+            json={"voter": "SJC/AL/1999/999"},
+        )
+        assert unknown.status_code == 404, unknown.text
+        assert len(CAPTURED) == resend_start + 2, "an unknown member was emailed"
+        ok("an unknown member is refused instead of emailed")
+
+        with SessionLocal() as db:
+            db.get(Election, election_id).locked_at = None
+            db.commit()
+
+        # ── 7. an SMTP batch reuses one connection and defers the overflow ───
+
+        class FakeSmtpSession:
+            """Stands in for a real cPanel session; records connections and sends."""
+
+            instances: list["FakeSmtpSession"] = []
+
+            def __init__(self) -> None:
+                self.server = None
+                self.connections = 0
+                self.sent = 0
+                FakeSmtpSession.instances.append(self)
+
+            def connect(self, *, timeout_seconds=None) -> None:
+                self.connections += 1
+                self.server = object()
+                # The batch must already hold the shared connection slot while
+                # its session is open, so a concurrent single send cannot push
+                # the mailbox past SMTP_MAX_CONNECTIONS.
+                assert notifications_module._smtp_slots().acquire(blocking=False) is False, (
+                    "the batch session did not take a shared SMTP slot"
+                )
+
+            def close(self) -> None:
+                self.server = None
+
+            def send(self, message) -> str:
+                assert self.server is not None, "send without a connection"
+                self.sent += 1
+                return str(message["Message-ID"])
+
+        with SessionLocal() as db:
+            for voter in db.execute(
+                select(Voter).where(
+                    Voter.election_id == election_id,
+                    Voter.is_eligible.is_(True),
+                    Voter.register_status == "approved",
+                )
+            ).scalars():
+                voter.registration_email_sent_at = None
+            db.commit()
+
+        original_session = notifications_module._SmtpSession
+        original_provider = settings.email_provider
+        original_host = settings.smtp_host
+        original_batch = settings.smtp_batch_size
+        original_delay = settings.smtp_send_delay_ms
+        original_max_connections = settings.smtp_max_connections
+        original_slots = notifications_module._SMTP_SLOTS
+        notifications_module._SmtpSession = FakeSmtpSession
+        notifications_module._SMTP_SLOTS = None
+        settings.email_provider = "smtp"
+        settings.smtp_host = "smtp.example.test"
+        settings.smtp_batch_size = 2
+        settings.smtp_send_delay_ms = 0
+        # One slot makes the batch's hold observable from inside connect().
+        settings.smtp_max_connections = 1
+        try:
+            first = client.post(
+                f"/api/register/{election_id}/notifications/retry", headers=chair_headers
+            )
+            assert first.status_code == 200, first.text
+            first_notices = first.json()["notifications"]
+            assert first_notices["email_sent"] == 2, first_notices
+            assert first_notices["email_deferred"] == eligible - 2, first_notices
+            assert len(FakeSmtpSession.instances) == 1, len(FakeSmtpSession.instances)
+            assert FakeSmtpSession.instances[0].connections == 1
+            assert FakeSmtpSession.instances[0].sent == 2
+
+            remaining = eligible - 2
+            while remaining > 0:
+                run = client.post(
+                    f"/api/register/{election_id}/notifications/retry", headers=chair_headers
+                )
+                assert run.status_code == 200, run.text
+                run_notices = run.json()["notifications"]
+                sent = min(2, remaining)
+                assert run_notices["email_sent"] == sent, run_notices
+                assert run_notices["email_already_sent"] == eligible - remaining, run_notices
+                remaining -= sent
+            assert run_notices["email_deferred"] == 0, run_notices
+            assert all(session.connections == 1 for session in FakeSmtpSession.instances)
+            assert all(session.sent <= 2 for session in FakeSmtpSession.instances)
+            assert sum(session.sent for session in FakeSmtpSession.instances) == eligible
+            ok(
+                "an SMTP batch reuses one connection per run, caps the batch "
+                "and defers the rest to the next run"
+            )
+        finally:
+            notifications_module._SmtpSession = original_session
+            notifications_module._SMTP_SLOTS = original_slots
+            settings.email_provider = original_provider
+            settings.smtp_host = original_host
+            settings.smtp_batch_size = original_batch
+            settings.smtp_send_delay_ms = original_delay
+            settings.smtp_max_connections = original_max_connections
+
+        # ── 8. read boundaries and provider readiness ────────────────────────
         login = client.post(
             "/api/auth/login",
             json={"email": "observer@sjcjos-alumni.org", "password": "ChangeMe!2026"},
@@ -322,7 +542,7 @@ def main() -> None:
         assert overview.json()["live"]["failed_identity_checks"] >= 1
         ok("committee monitoring reports notice delivery and failed identity checks without secrets")
 
-        # ── 7. casting records turnout without linking it to the ballot ─────
+        # ── 9. casting records turnout without linking it to the ballot ─────
         numbers = crypto.credential_public_numbers()
         modulus, exponent = int(numbers["n"], 16), int(numbers["e"], 16)
         token_hex = secrets.token_hex(32)

@@ -11,8 +11,14 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import client_ip, record_audit, require_permission, roles_for
 from ..models import AccreditationRecord, Election, ElectionEvent, Profile, Voter
-from ..notifications import notify_registered_voters
-from ..schemas import EligibilityUpdate, RegisterImport, VoterCreate, WhatsAppConsentBulk
+from ..notifications import notify_registered_voters, resend_registration_email
+from ..schemas import (
+    EligibilityUpdate,
+    NotificationResend,
+    RegisterImport,
+    VoterCreate,
+    WhatsAppConsentBulk,
+)
 from ..services import election_stats, get_election
 
 router = APIRouter(prefix="/register", tags=["register"])
@@ -329,4 +335,124 @@ def approve_register(
         "approved": len(eligible),
         "excluded": len(voters) - len(eligible),
         "notifications": notifications,
+    }
+
+
+@router.post("/{election_id}/notifications/retry")
+def retry_registration_notices(
+    election_id: str,
+    request: Request,
+    profile: Profile = Depends(require_permission("register.approve")),
+    db: Session = Depends(get_db),
+):
+    """Resend registration notices that have not been delivered yet.
+
+    Approval sends the notices, but the register locks as soon as the first
+    ballot is cast, so a provider outage during approval would otherwise leave
+    voters without their Voter ID for the rest of the election. This action is
+    allowed after the lock because it never changes the register: it reuses the
+    idempotent notifier, which skips every channel that already succeeded and
+    retries only the notices still pending or failed.
+    """
+    election = get_election(db, election_id)
+    voters = db.execute(select(Voter).where(Voter.election_id == election.id)).scalars().all()
+    eligible = [v for v in voters if v.is_eligible and v.register_status == "approved"]
+    if not eligible:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "The register has no approved voters to notify",
+        )
+
+    try:
+        notifications = notify_registered_voters(
+            db, election=election, voters=eligible, request_ip=client_ip(request)
+        )
+    except Exception as exc:
+        db.rollback()
+        notifications = {
+            "voters": len(eligible),
+            "error": f"registration notices failed ({type(exc).__name__})",
+        }
+    record_audit(
+        db, action="register.notify_retry", election_id=election.id, actor_id=profile.id,
+        entity="voter_register", ip_address=client_ip(request), detail=notifications,
+    )
+    db.commit()
+    return {
+        "voters": len(eligible),
+        "register_locked": bool(election.locked_at),
+        "notifications": notifications,
+    }
+
+
+@router.post("/{election_id}/notifications/resend")
+def resend_one_registration_notice(
+    election_id: str,
+    payload: NotificationResend,
+    request: Request,
+    profile: Profile = Depends(require_permission("register.approve")),
+    db: Session = Depends(get_db),
+):
+    """Resend one member's registration email, on demand.
+
+    A voter may report that the notice never arrived, or a batch send may have
+    failed for them, and the register cannot be re-approved once voting starts.
+    The committee names the voter by Voter ID or email address and only that
+    voter's email is sent, so a single complaint never re-mails the register.
+    """
+    election = get_election(db, election_id)
+    target = payload.voter.strip()
+    if not target:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Enter a Voter ID or email address"
+        )
+    voters = db.execute(select(Voter).where(Voter.election_id == election.id)).scalars().all()
+    lowered = target.lower()
+    matches = [
+        voter
+        for voter in voters
+        if voter.voter_id.lower() == lowered
+        or (voter.email or "").strip().lower() == lowered
+    ]
+    if not matches:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"No voter on this register matches {target}"
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{len(matches)} voters share {target}; resend by Voter ID instead",
+        )
+    voter = matches[0]
+    if not voter.is_eligible or voter.register_status != "approved":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{voter.voter_id} is not an approved voter on this register",
+        )
+    result = resend_registration_email(
+        db, election=election, voter=voter, request_ip=client_ip(request)
+    )
+    record_audit(
+        db, action="register.notify_resend", election_id=election.id, actor_id=profile.id,
+        entity="voter", entity_id=voter.voter_id, ip_address=client_ip(request),
+        detail={
+            "voter_id": voter.voter_id,
+            "status": result.status,
+            "provider": result.provider,
+            "error": result.error,
+        },
+    )
+    db.commit()
+    return {
+        "voter": {
+            "voter_id": voter.voter_id,
+            "full_name": voter.full_name,
+            "email": result.recipient_masked,
+        },
+        "register_locked": bool(election.locked_at),
+        "delivery": {
+            "status": result.status,
+            "provider": result.provider,
+            "error": result.error,
+        },
     }
