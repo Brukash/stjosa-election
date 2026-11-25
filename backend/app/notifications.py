@@ -1034,6 +1034,52 @@ def _send_registration_whatsapp(
     )
 
 
+def _apply_delivery_results(
+    db: Session,
+    summary: dict,
+    results: list[tuple[str, Voter, DeliveryResult]],
+    *,
+    election_id: str,
+    request_ip: str | None,
+) -> None:
+    """Record one batch's results, then commit before the next batch starts.
+
+    Mail that has already left the mailbox has to stay recorded even when a
+    later batch in the same run is cut short by the function's time limit or a
+    dead connection, otherwise the next run would mail those voters a second
+    time. The sent timestamp is only refreshed for a confirmed send.
+    """
+    if not results:
+        return
+    for channel, voter, result in results:
+        if result.status == "sent":
+            summary[f"{channel}_sent"] += 1
+            if channel == "email":
+                voter.registration_email_sent_at = now()
+            elif channel == "sms":
+                voter.registration_sms_sent_at = now()
+            else:
+                voter.registration_whatsapp_sent_at = now()
+        else:
+            summary[f"{channel}_failed"] += 1
+        db.add(
+            NotificationDelivery(
+                election_id=election_id,
+                voter_row_id=voter.id,
+                challenge_id=None,
+                purpose="registration",
+                channel=result.channel,
+                provider=result.provider,
+                status=result.status,
+                recipient_masked=result.recipient_masked,
+                provider_message_id=result.provider_message_id,
+                error=(result.error or "")[:300] or None,
+                request_ip=request_ip,
+            )
+        )
+    db.commit()
+
+
 def notify_registered_voters(
     db: Session,
     *,
@@ -1109,19 +1155,40 @@ def notify_registered_voters(
 
     if email_attempts:
         if _email_provider() == "smtp":
-            # One authenticated connection carries the batch: cPanel counts and
+            # One authenticated connection carries a batch: cPanel counts and
             # throttles connections per mailbox, so reconnecting per recipient is
-            # what turned a 160-voter send into a refused burst. The cap keeps a
-            # single invocation inside the function's time limit; whatever is left
-            # is reported as deferred and sent by the next idempotent run.
-            batch = email_attempts[: max(1, settings.smtp_batch_size)]
-            deferred = len(email_attempts) - len(batch)
-            if batch:
+            # what turned a 160-voter send into a refused burst.
+            #
+            # A run works through the whole register instead of stopping at the
+            # first batch, so an approval of a large register is not left half
+            # sent for someone to finish with "Resend unsent notices". It stays
+            # bounded by SMTP_RUN_BUDGET_SECONDS: whatever one run cannot finish
+            # is reported as deferred and the register page continues on its own.
+            # Each batch is committed as it lands, so a run cut short never loses
+            # a send it actually made (and never mails that voter twice).
+            size = max(1, settings.smtp_batch_size)
+            deadline = time.monotonic() + max(0, settings.smtp_run_budget_seconds)
+            pending = list(email_attempts)
+            while pending and time.monotonic() < deadline:
+                batch, pending = pending[:size], pending[size:]
                 batch_results, refused_by_host = _send_registration_email_batch(
                     [voter for voter, _ in batch], election
                 )
-                deferred += refused_by_host
-                results.extend(("email", voter, result) for result, voter in batch_results)
+                _apply_delivery_results(
+                    db,
+                    summary,
+                    [("email", voter, result) for result, voter in batch_results],
+                    election_id=election.id,
+                    request_ip=request_ip,
+                )
+                if refused_by_host:
+                    # The mailbox refused the connection itself. Stop instead of
+                    # spending the rest of the budget on a host that is not
+                    # accepting mail; what was never attempted stays deferred.
+                    deferred = refused_by_host + len(pending)
+                    break
+            else:
+                deferred = len(pending)
         else:
             with ThreadPoolExecutor(max_workers=min(8, len(email_attempts))) as executor:
                 futures = {
@@ -1148,32 +1215,9 @@ def notify_registered_voters(
                 results.append((channel, voter, _worker_result(future, channel)))
 
     summary["email_deferred"] = deferred
-    for channel, voter, result in results:
-        if result.status == "sent":
-            summary[f"{channel}_sent"] += 1
-            if channel == "email":
-                voter.registration_email_sent_at = now()
-            elif channel == "sms":
-                voter.registration_sms_sent_at = now()
-            else:
-                voter.registration_whatsapp_sent_at = now()
-        else:
-            summary[f"{channel}_failed"] += 1
-        db.add(
-            NotificationDelivery(
-                election_id=election.id,
-                voter_row_id=voter.id,
-                challenge_id=None,
-                purpose="registration",
-                channel=result.channel,
-                provider=result.provider,
-                status=result.status,
-                recipient_masked=result.recipient_masked,
-                provider_message_id=result.provider_message_id,
-                error=(result.error or "")[:300] or None,
-                request_ip=request_ip,
-            )
-        )
+    _apply_delivery_results(
+        db, summary, results, election_id=election.id, request_ip=request_ip
+    )
     db.commit()
     return summary
 

@@ -3,10 +3,16 @@
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Card, Loading, SectionHeading, Stat } from "@/components/ui";
-import { api, can, getProfile } from "@/lib/api";
+import { api, can, formatDate, getProfile } from "@/lib/api";
 
 const SAMPLE = `voter_id,full_name,email,phone,whatsapp_consent,alumni_set,graduation_year
 SJC/AL/2016/025,Jane Doe,jane.doe@example.com,+2348000000000,true,Lagos Chapter,2016`;
+
+// A single click finishes the whole register: the API sends bounded batches and
+// reports whatever it could not finish, and the page asks it to continue. The
+// default cap is 240 voters per continuation, so a register would have to be
+// enormous before this limit is reached.
+const MAX_NOTICE_BATCHES = 8;
 
 const EMPTY_VOTER = {
   voter_id: "",
@@ -22,7 +28,7 @@ const EMPTY_VOTER = {
 function deliverySummary(n: any) {
   if (!n) return "";
   const deferred = n.email_deferred
-    ? ` ${n.email_deferred} notice(s) were not attempted in this run — run this action again to send them.`
+    ? ` ${n.email_deferred} notice(s) are still waiting after the last batch — run this action once more to finish them.`
     : "";
   return (
     deferred +
@@ -47,6 +53,9 @@ export default function RegisterPage() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [resendTarget, setResendTarget] = useState("");
+  const [fixTarget, setFixTarget] = useState("");
+  const [fixEmail, setFixEmail] = useState("");
+  const [fixNote, setFixNote] = useState("");
   const [voterForm, setVoterForm] = useState({ ...EMPTY_VOTER });
   const [consentSelection, setConsentSelection] = useState<Set<string>>(new Set());
   const [consentSource, setConsentSource] = useState("");
@@ -81,11 +90,19 @@ export default function RegisterPage() {
         auth: true,
         body: JSON.stringify({ csv_text: csv }),
       });
+      const rejected = (result.errors ?? []) as { line: number; error: string }[];
+      const listed = rejected
+        .slice(0, 8)
+        .map((row) => `Line ${row.line}: ${row.error}`)
+        .join(" ");
       setPopup({
         title: "Register imported",
         message:
           `${result.added} record(s) imported, ${result.skipped_duplicates} duplicate(s) skipped. ` +
-          (result.errors?.length ? `${result.errors.length} row error(s).` : ""),
+          (rejected.length
+            ? `${rejected.length} row(s) were rejected, including bad email addresses — ` +
+              `${listed}${rejected.length > 8 ? " …" : ""} These rows are not on the register; fix them and import the file again.`
+            : "No rows were rejected."),
       });
       setCsv("");
       load();
@@ -133,17 +150,93 @@ export default function RegisterPage() {
     }
   }
 
+  async function correctEmail(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setPopup(null);
+    try {
+      const result = await api(`/api/register/${id}/voters/email`, {
+        method: "POST",
+        auth: true,
+        body: JSON.stringify({
+          voter: fixTarget.trim(),
+          email: fixEmail.trim(),
+          note: fixNote.trim() || null,
+        }),
+      });
+      setPopup({
+        title: "Email address corrected",
+        message:
+          `${result.voter.full_name} (${result.voter.voter_id}) now has ${result.voter.email}. ` +
+          "The previous and new address are recorded in the audit log. Send the notice to the " +
+          "new address with Resend to one member.",
+      });
+      setFixTarget("");
+      setFixEmail("");
+      setFixNote("");
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // The API works through as many paced batches as one invocation can safely
+  // hold and reports the rest as deferred. This asks it to carry on until
+  // nothing is left, so an approval of a large register never leaves voters
+  // waiting for someone to remember to press "Resend unsent notices".
+  async function finishDeferredNotices(start: any) {
+    const summary: any = { ...(start ?? {}) };
+    let batches = 1;
+    while (!summary.error && (summary.email_deferred ?? 0) > 0 && batches < MAX_NOTICE_BATCHES) {
+      let next: any;
+      try {
+        next = await api(`/api/register/${id}/notifications/retry`, {
+          method: "POST",
+          auth: true,
+        });
+      } catch (err: any) {
+        // The approval (or the first batch) already happened: report the
+        // notices that are still waiting instead of hiding that behind an error.
+        summary.continuation_error = err.message;
+        break;
+      }
+      const more = next.notifications ?? {};
+      for (const [key, value] of Object.entries(more)) {
+        if (typeof value !== "number" || key === "voters") continue;
+        // Sent and failed counts describe one run, so they add up across the
+        // batches; everything else describes where the register stands now.
+        const perRun =
+          (key.endsWith("_sent") || key.endsWith("_failed")) && !key.endsWith("_already_sent");
+        summary[key] = perRun ? (summary[key] ?? 0) + value : value;
+      }
+      summary.voters = more.voters ?? summary.voters;
+      batches += 1;
+    }
+    return { summary, batches };
+  }
+
   async function approveRegister() {
     setBusy(true);
     setError("");
     try {
       const result = await api(`/api/register/${id}/approve`, { method: "POST", auth: true });
-      const n = result.notifications;
+      const { summary: n, batches } = await finishDeferredNotices(result.notifications);
       const delivery = deliverySummary(n);
       if (n?.error) setError(`Register approved, but ${n.error}.`);
+      else if (n?.continuation_error)
+        setError(
+          `Register approved, but the remaining notices could not be sent: ${n.continuation_error}. ` +
+            `Run Resend unsent notices to finish them.`,
+        );
       setPopup({
         title: "Register approved",
-        message: `${result.approved} voter(s) approved; ${result.excluded} excluded.${delivery}`,
+        message:
+          `${result.approved} voter(s) approved; ${result.excluded} excluded.` +
+          (batches > 1 ? ` Notices went out in ${batches} batches.` : "") +
+          delivery,
       });
       load();
     } catch (err: any) {
@@ -162,8 +255,13 @@ export default function RegisterPage() {
         method: "POST",
         auth: true,
       });
-      const n = result.notifications;
+      const { summary: n, batches } = await finishDeferredNotices(result.notifications);
       if (n?.error) setError(`Registration notices were not sent: ${n.error}.`);
+      else if (n?.continuation_error)
+        setError(
+          `Some notices could not be sent: ${n.continuation_error}. ` +
+            `Run this action again to finish them.`,
+        );
       setPopup({
         title: "Registration notices retried",
         message:
@@ -171,6 +269,7 @@ export default function RegisterPage() {
           (result.register_locked
             ? " The register is locked, so only notices that had not been delivered were sent."
             : " Notices that had already been delivered were skipped.") +
+          (batches > 1 ? ` Sent in ${batches} batches.` : "") +
           deliverySummary(n),
       });
       load();
@@ -472,6 +571,48 @@ export default function RegisterPage() {
               </p>
             </form>
           ) : null}
+          {canApprove ? (
+            <form onSubmit={correctEmail} className="mt-4 rounded-lg border border-rule p-4">
+              <label className="label" htmlFor="fix-email-voter">
+                Correct a member&apos;s email
+              </label>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input
+                  id="fix-email-voter"
+                  className="input"
+                  value={fixTarget}
+                  onChange={(event) => setFixTarget(event.target.value)}
+                  placeholder="Voter ID or current email"
+                />
+                <input
+                  type="email"
+                  className="input"
+                  value={fixEmail}
+                  onChange={(event) => setFixEmail(event.target.value)}
+                  placeholder="Correct email address"
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <input
+                  className="input min-w-[180px] flex-1"
+                  value={fixNote}
+                  onChange={(event) => setFixNote(event.target.value)}
+                  placeholder="Reason (optional, e.g. member's written request)"
+                />
+                <button
+                  className="btn-outline"
+                  disabled={busy || !fixTarget.trim() || !fixEmail.trim()}
+                >
+                  {busy ? "Saving…" : "Correct email"}
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-ink/45">
+                Changes only this voter&apos;s address, and records the old and new values in the
+                audit log. Allowed after the register locks, because an address cannot change
+                eligibility. An address that cannot receive mail is refused with the reason.
+              </p>
+            </form>
+          ) : null}
           <div className="mt-5">
             <label className="label">Search voters</label>
             <input
@@ -675,6 +816,11 @@ export default function RegisterPage() {
                   <p className="mt-0.5 break-all text-[11px] text-ink/45">
                     {voter.email ?? voter.phone ?? "—"}
                   </p>
+                  {voter.email_problem ? (
+                    <span className="pill-red mt-1 inline-block" title={voter.email_problem}>
+                      invalid email
+                    </span>
+                  ) : null}
                 </div>
                 <span className={voter.register_status === "approved" ? "pill-green" : "pill-grey"}>
                   {voter.register_status}
@@ -689,6 +835,26 @@ export default function RegisterPage() {
                   Accredited <span className="font-medium text-ink/75">{voter.accredited ? "yes" : "no"}</span>
                 </span>
                 {!voter.is_eligible ? <span className="pill-red">ineligible</span> : null}
+              </div>
+              <div className="mt-2 break-words text-[11px] leading-relaxed text-ink/50">
+                {voter.last_notice ? (
+                  <>
+                    <span
+                      className={
+                        voter.last_notice.status === "sent" ? "pill-green" : "pill-red"
+                      }
+                    >
+                      notice {voter.last_notice.status}
+                    </span>{" "}
+                    {formatDate(voter.last_notice.at)} · {voter.last_notice.attempts} attempt(s)
+                    · <span className="font-mono text-[10.5px]">{voter.last_notice.recipient_masked}</span>
+                    {voter.last_notice.error ? (
+                      <span className="mt-1 block text-red-700">{voter.last_notice.error}</span>
+                    ) : null}
+                  </>
+                ) : (
+                  <span className="text-ink/35">No registration email attempt recorded</span>
+                )}
               </div>
               {(canApprove || (isChairman && !registerLocked)) ? (
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -739,6 +905,7 @@ export default function RegisterPage() {
                 <th>Status</th>
                 <th>WhatsApp</th>
                 <th>Accredited</th>
+                <th>Last notice</th>
                 {canApprove ? <th /> : null}
               </tr>
             </thead>
@@ -764,6 +931,11 @@ export default function RegisterPage() {
                   <td>
                     <span className="font-medium text-ink">{voter.full_name}</span>
                     <span className="mt-0.5 block text-[11px] text-ink/45">{voter.email ?? voter.phone}</span>
+                    {voter.email_problem ? (
+                      <span className="pill-red mt-1 inline-block" title={voter.email_problem}>
+                        invalid email
+                      </span>
+                    ) : null}
                   </td>
                   <td className="text-xs">{voter.alumni_set}</td>
                   <td>
@@ -789,6 +961,35 @@ export default function RegisterPage() {
                     ) : null}
                   </td>
                   <td>{voter.accredited ? <span className="pill-green">yes</span> : <span className="text-xs text-ink/35">no</span>}</td>
+                  <td className="text-xs">
+                    {voter.last_notice ? (
+                      <div className="max-w-[200px]">
+                        <span
+                          className={
+                            voter.last_notice.status === "sent" ? "pill-green" : "pill-red"
+                          }
+                        >
+                          {voter.last_notice.status}
+                        </span>
+                        <span className="mt-1 block text-[11px] text-ink/50">
+                          {formatDate(voter.last_notice.at)} · {voter.last_notice.attempts} attempt(s)
+                        </span>
+                        <span className="mt-0.5 block break-all font-mono text-[10.5px] text-ink/45">
+                          {voter.last_notice.recipient_masked}
+                        </span>
+                        {voter.last_notice.error ? (
+                          <span
+                            className="mt-0.5 block text-[11px] leading-snug text-red-700"
+                            title={voter.last_notice.error}
+                          >
+                            {voter.last_notice.error}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-ink/35">no attempt</span>
+                    )}
+                  </td>
                   {canApprove ? (
                     <td className="text-right">
                       <button

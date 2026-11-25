@@ -103,7 +103,8 @@ hourly message cap and its simultaneous-connection cap.
    | `SMTP_SSL` | `true` on port 465. On 587 set `SMTP_STARTTLS=true` and leave `SMTP_SSL` unset |
    | `SMTP_MAX_CONNECTIONS` | `3` (default); cPanel blocks mailboxes that open too many connections |
    | `SMTP_SEND_DELAY_MS` | `500` (default); pause between messages in a notice batch |
-   | `SMTP_BATCH_SIZE` | `120` (default); notices sent per invocation, the remainder is reported as deferred |
+   | `SMTP_BATCH_SIZE` | `120` (default); most notices sent in one batch before the run starts the next batch |
+   | `SMTP_RUN_BUDGET_SECONDS` | `180` (default); total seconds one run may spend sending, then the remainder is reported as deferred |
 
    `EMAIL_FROM` must be that mailbox, or an alias on the same domain: cPanel refuses a sender it
    does not host. Remove `RESEND_API_KEY` once SMTP works so the deployment cannot fall back
@@ -135,6 +136,16 @@ results page (`POST /api/results/{election_id}/notifications/retry`, permission 
 audited as `results.notify_retry`). It sends the current declaration only to voters with no recorded
 successful result email, never changes the declaration, and is safe to run repeatedly.
 
+**What actually happened, before you resend.** The register table shows each voter's last
+registration-email attempt: status, time, number of attempts, masked recipient and the provider error.
+Read it before sending again — a `failed` row with `SMTPRecipientsRefused` means the stored address
+itself was rejected, so an identical resend fails identically. The register also marks any address it
+cannot deliver to, and **Correct a member's email** fixes it
+(`POST /api/register/{election_id}/voters/email`, permission `register.approve`, audited as
+`register.email_corrected` with the previous and new address). That correction is allowed after the lock,
+because an address cannot change eligibility. After correcting, send the notice with **Resend to one
+member**.
+
 **One member on demand.** When a voter reports that the notice never arrived, use **Resend to one
 member** on the register page: type the Voter ID or the email address and send. This is
 `POST /api/register/{election_id}/notifications/resend` (permission `register.approve`, audited as
@@ -155,10 +166,15 @@ registration notices, vote confirmations and declared results — go through one
 - **One session per batch.** Registration notices for one approval (or one **Resend unsent notices**
   run) and the declared results for one declaration authenticate a single SMTP session and send
   every message over it, instead of opening a connection per voter.
-- **A per-invocation cap.** At most `SMTP_BATCH_SIZE` bulk emails go out per invocation, so a
-  160-voter register is two runs rather than one long burst. Each voter's sent channel is recorded,
-  so the next run skips whoever already received theirs. If the host refuses the connection, the run
-  stops there and reports the rest as deferred instead of retrying it for every recipient.
+- **Bounded batches that finish the register.** A run sends at most `SMTP_BATCH_SIZE` emails per
+  batch, then starts the next batch itself, so a 160-voter register is finished by one approval
+  instead of waiting for someone to press **Resend unsent notices** again. Each batch is committed as
+  it lands: a run cut short never loses a send it made, and never mails that voter twice, because the
+  next batch skips whoever already has their notice. A whole run is bounded by
+  `SMTP_RUN_BUDGET_SECONDS` (default `180`), which keeps the request inside the function's time
+  limit; whatever it cannot finish is reported as `email_deferred` and the register page calls the
+  action again on its own until nothing is left. If the host refuses the connection, the run stops
+  there instead of retrying every remaining recipient.
 
 **Ask the host for two numbers.** The per-hour message limit for the domain (commonly 200–500/hour
 on shared hosting) and the simultaneous SMTP connection cap. 150 registration notices plus 150 vote

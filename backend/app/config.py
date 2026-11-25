@@ -83,6 +83,12 @@ class Settings:
     # defers is reported back and sent by the next idempotent run.
     smtp_send_delay_ms: int = _int("SMTP_SEND_DELAY_MS", 500)
     smtp_batch_size: int = _int("SMTP_BATCH_SIZE", 120)
+    # A run works through the whole register in batches of SMTP_BATCH_SIZE
+    # instead of stopping at the first one, but it stays bounded: once this many
+    # seconds have been spent sending, the remainder is reported as deferred for
+    # the next call. The register page continues on its own, so a large register
+    # still finishes without anyone pressing the button again.
+    smtp_run_budget_seconds: int = _int("SMTP_RUN_BUDGET_SECONDS", 180)
 
     # Termii is the required SMS gateway. Twilio remains available only as a
     # legacy fallback for deployments that have not migrated yet.

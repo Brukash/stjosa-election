@@ -443,46 +443,92 @@ def main() -> None:
         original_batch = settings.smtp_batch_size
         original_delay = settings.smtp_send_delay_ms
         original_max_connections = settings.smtp_max_connections
+        original_budget = settings.smtp_run_budget_seconds
         original_slots = notifications_module._SMTP_SLOTS
         notifications_module._SmtpSession = FakeSmtpSession
         notifications_module._SMTP_SLOTS = None
         settings.email_provider = "smtp"
         settings.smtp_host = "smtp.example.test"
         settings.smtp_batch_size = 2
+        settings.smtp_run_budget_seconds = 300
         settings.smtp_send_delay_ms = 0
         # One slot makes the batch's hold observable from inside connect().
         settings.smtp_max_connections = 1
         try:
-            first = client.post(
+            run = client.post(
                 f"/api/register/{election_id}/notifications/retry", headers=chair_headers
             )
-            assert first.status_code == 200, first.text
-            first_notices = first.json()["notifications"]
-            assert first_notices["email_sent"] == 2, first_notices
-            assert first_notices["email_deferred"] == eligible - 2, first_notices
-            assert len(FakeSmtpSession.instances) == 1, len(FakeSmtpSession.instances)
-            assert FakeSmtpSession.instances[0].connections == 1
-            assert FakeSmtpSession.instances[0].sent == 2
-
-            remaining = eligible - 2
-            while remaining > 0:
-                run = client.post(
-                    f"/api/register/{election_id}/notifications/retry", headers=chair_headers
-                )
-                assert run.status_code == 200, run.text
-                run_notices = run.json()["notifications"]
-                sent = min(2, remaining)
-                assert run_notices["email_sent"] == sent, run_notices
-                assert run_notices["email_already_sent"] == eligible - remaining, run_notices
-                remaining -= sent
+            assert run.status_code == 200, run.text
+            run_notices = run.json()["notifications"]
+            # One invocation now works through the whole register in bounded
+            # batches instead of leaving the overflow for a second click.
+            assert run_notices["email_sent"] == eligible, run_notices
             assert run_notices["email_deferred"] == 0, run_notices
             assert all(session.connections == 1 for session in FakeSmtpSession.instances)
             assert all(session.sent <= 2 for session in FakeSmtpSession.instances)
+            assert len(FakeSmtpSession.instances) == (eligible + 1) // 2
             assert sum(session.sent for session in FakeSmtpSession.instances) == eligible
-            ok(
-                "an SMTP batch reuses one connection per run, caps the batch "
-                "and defers the rest to the next run"
+            ok("one SMTP run sends the whole register in batches of SMTP_BATCH_SIZE")
+
+            # A mailbox that refuses the connection stops the run instead of
+            # spending the rest of the budget, and what it did not attempt is
+            # reported as deferred so the register page can continue.
+            with SessionLocal() as db:
+                for voter in db.execute(
+                    select(Voter).where(
+                        Voter.election_id == election_id,
+                        Voter.is_eligible.is_(True),
+                        Voter.register_status == "approved",
+                    )
+                ).scalars():
+                    voter.registration_email_sent_at = None
+                db.commit()
+            FakeSmtpSession.instances.clear()
+            original_connect = FakeSmtpSession.connect
+
+            def refuse_after_first(self, *, timeout_seconds=None):
+                if len(FakeSmtpSession.instances) > 1:
+                    raise OSError("connection refused")
+                original_connect(self, timeout_seconds=timeout_seconds)
+
+            FakeSmtpSession.connect = refuse_after_first
+            try:
+                partial = client.post(
+                    f"/api/register/{election_id}/notifications/retry", headers=chair_headers
+                )
+                assert partial.status_code == 200, partial.text
+                partial_notices = partial.json()["notifications"]
+                assert partial_notices["email_sent"] == 2, partial_notices
+                assert (
+                    partial_notices["email_sent"]
+                    + partial_notices["email_failed"]
+                    + partial_notices["email_deferred"]
+                    == eligible
+                ), partial_notices
+                ok("a refused host stops the run and defers what it did not attempt")
+
+                # That refusal was simulated, so its failure row is deleted: the
+                # monitoring totals checked below must reflect real sends only.
+                with SessionLocal() as db:
+                    for row in db.execute(
+                        select(NotificationDelivery).where(
+                            NotificationDelivery.election_id == election_id,
+                            NotificationDelivery.status == "failed",
+                            NotificationDelivery.error == "smtp delivery failed: OSError",
+                        )
+                    ).scalars():
+                        db.delete(row)
+                    db.commit()
+            finally:
+                FakeSmtpSession.connect = original_connect
+
+            resumed = client.post(
+                f"/api/register/{election_id}/notifications/retry", headers=chair_headers
             )
+            assert resumed.status_code == 200, resumed.text
+            assert resumed.json()["notifications"]["email_deferred"] == 0, resumed.text
+            assert sum(session.sent for session in FakeSmtpSession.instances) == eligible
+            ok("the next run finishes the notices a refused host left behind")
         finally:
             notifications_module._SmtpSession = original_session
             notifications_module._SMTP_SLOTS = original_slots
@@ -491,6 +537,7 @@ def main() -> None:
             settings.smtp_batch_size = original_batch
             settings.smtp_send_delay_ms = original_delay
             settings.smtp_max_connections = original_max_connections
+            settings.smtp_run_budget_seconds = original_budget
 
         # ── 8. read boundaries and provider readiness ────────────────────────
         login = client.post(

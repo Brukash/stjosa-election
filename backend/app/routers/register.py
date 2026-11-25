@@ -10,16 +10,25 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import client_ip, record_audit, require_permission, roles_for
-from ..models import AccreditationRecord, Election, ElectionEvent, Profile, Voter
-from ..notifications import notify_registered_voters, resend_registration_email
+from ..models import (
+    AccreditationRecord,
+    Election,
+    ElectionEvent,
+    NotificationDelivery,
+    Profile,
+    Voter,
+)
+from ..notifications import mask_email, notify_registered_voters, resend_registration_email
 from ..schemas import (
     EligibilityUpdate,
+    EmailCorrection,
     NotificationResend,
     RegisterImport,
     VoterCreate,
     WhatsAppConsentBulk,
 )
 from ..services import election_stats, get_election
+from ..validation import clean_email, email_problem
 
 router = APIRouter(prefix="/register", tags=["register"])
 
@@ -27,12 +36,20 @@ REQUIRED_COLUMNS = {"voter_id", "full_name"}
 TRUE_VALUES = {"1", "true", "yes", "y", "on"}
 
 
-def _voter_dict(voter: Voter, accredited: bool) -> dict:
+def _voter_dict(
+    voter: Voter,
+    accredited: bool,
+    last_notice: NotificationDelivery | None = None,
+    notice_attempts: int = 0,
+) -> dict:
     return {
         "id": voter.id,
         "voter_id": voter.voter_id,
         "full_name": voter.full_name,
         "email": voter.email,
+        # A readable reason, so an address that cannot receive a notice is
+        # visible on the register instead of surfacing at the mail server.
+        "email_problem": email_problem(voter.email) if (voter.email or "").strip() else None,
         "phone": voter.phone,
         "whatsapp_consent": voter.whatsapp_consent,
         "alumni_set": voter.alumni_set,
@@ -40,6 +57,28 @@ def _voter_dict(voter: Voter, accredited: bool) -> dict:
         "is_eligible": voter.is_eligible,
         "register_status": voter.register_status,
         "accredited": accredited,
+        # What actually happened on the last registration-email attempt, so the
+        # committee can read the delivery record before deciding to resend. The
+        # masked recipient and provider error are already the only contact detail
+        # stored, so nothing new is exposed.
+        "registration_email_sent_at": (
+            voter.registration_email_sent_at.isoformat()
+            if voter.registration_email_sent_at
+            else None
+        ),
+        "last_notice": (
+            {
+                "channel": last_notice.channel,
+                "status": last_notice.status,
+                "provider": last_notice.provider,
+                "recipient_masked": last_notice.recipient_masked,
+                "error": last_notice.error,
+                "at": last_notice.created_at.isoformat() if last_notice.created_at else None,
+                "attempts": notice_attempts,
+            }
+            if last_notice
+            else None
+        ),
     }
 
 
@@ -59,12 +98,41 @@ def list_register(
             select(AccreditationRecord).where(AccreditationRecord.election_id == election.id)
         ).scalars()
     }
+    # The latest registration-email attempt per voter, with a count of attempts.
+    # Email only: that is the channel the notice and the on-demand resend use, so
+    # this answers "what happened to his mail" without a channel that was never
+    # configured clouding the answer.
+    notice_rows = db.execute(
+        select(NotificationDelivery)
+        .where(
+            NotificationDelivery.election_id == election.id,
+            NotificationDelivery.purpose == "registration",
+            NotificationDelivery.channel == "email",
+        )
+        .order_by(NotificationDelivery.created_at.desc())
+    ).scalars().all()
+    latest_notice: dict[str, NotificationDelivery] = {}
+    notice_attempts: dict[str, int] = {}
+    for row in notice_rows:
+        if not row.voter_row_id:
+            continue
+        notice_attempts[row.voter_row_id] = notice_attempts.get(row.voter_row_id, 0) + 1
+        latest_notice.setdefault(row.voter_row_id, row)
+
     return {
         "election": {"id": election.id, "title": election.title, "status": election.status,
                      "register_approved": all(v.register_status == "approved" for v in voters) if voters else False,
                      "locked_at": election.locked_at.isoformat() if election.locked_at else None},
         "stats": election_stats(db, election.id),
-        "voters": [_voter_dict(v, v.id in accredited_ids) for v in voters],
+        "voters": [
+            _voter_dict(
+                v,
+                v.id in accredited_ids,
+                latest_notice.get(v.id),
+                notice_attempts.get(v.id, 0),
+            )
+            for v in voters
+        ],
     }
 
 
@@ -102,6 +170,16 @@ def import_register(
         if voter_id.lower() in existing:
             skipped += 1
             continue
+        # A malformed address is rejected here rather than stored: it fails at
+        # the mail server every time, and the register is the only place it
+        # lives. The row is reported so the committee fixes the file and imports
+        # it again (re-import adds only the records that are missing).
+        email = clean_email(row.get("email"))
+        if email:
+            problem = email_problem(email)
+            if problem:
+                errors.append({"line": line_no, "error": f"email: {problem}"})
+                continue
         graduation_year = None
         if row.get("graduation_year"):
             try:
@@ -112,7 +190,7 @@ def import_register(
             election_id=election.id,
             voter_id=voter_id,
             full_name=full_name,
-            email=row.get("email") or None,
+            email=email,
             phone=row.get("phone") or None,
             whatsapp_consent=(row.get("whatsapp_consent") or "").lower() in TRUE_VALUES,
             alumni_set=row.get("alumni_set") or "General",
@@ -162,7 +240,17 @@ def add_voter(
         )
     ).scalars().first():
         raise HTTPException(status.HTTP_409_CONFLICT, "This Voter ID already exists for the election")
-    voter = Voter(election_id=election.id, **payload.model_dump(), register_status="imported",
+    email = clean_email(payload.email)
+    if email:
+        problem = email_problem(email)
+        if problem:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"That email address cannot be used: {problem}",
+            )
+    fields = payload.model_dump()
+    fields["email"] = email
+    voter = Voter(election_id=election.id, **fields, register_status="imported",
                   imported_by=profile.id)
     db.add(voter)
     record_audit(db, action="register.voter_added", election_id=election.id, actor_id=profile.id,
@@ -455,4 +543,89 @@ def resend_one_registration_notice(
             "provider": result.provider,
             "error": result.error,
         },
+    }
+
+
+@router.post("/{election_id}/voters/email")
+def correct_voter_email(
+    election_id: str,
+    payload: EmailCorrection,
+    request: Request,
+    profile: Profile = Depends(require_permission("register.approve")),
+    db: Session = Depends(get_db),
+):
+    """Correct one voter's email address and record the change.
+
+    A notice fails permanently only when the address itself is wrong, and the
+    register is the only place that address lives, so a rejected send cannot be
+    fixed by sending again. The committee names the member by Voter ID or current
+    address and only that record changes. This is allowed after the register
+    locks because an address cannot alter eligibility, a cast ballot or the
+    result — and because a member who writes in with the right spelling is
+    exactly when voting is under way.
+    """
+    election = get_election(db, election_id)
+    target = payload.voter.strip()
+    if not target:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Enter a Voter ID or email address"
+        )
+    voters = db.execute(select(Voter).where(Voter.election_id == election.id)).scalars().all()
+    lowered = target.lower()
+    matches = [
+        voter
+        for voter in voters
+        if voter.voter_id.lower() == lowered
+        or (voter.email or "").strip().lower() == lowered
+    ]
+    if not matches:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"No voter on this register matches {target}"
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{len(matches)} voters share {target}; correct by Voter ID instead",
+        )
+    voter = matches[0]
+
+    email = clean_email(payload.email)
+    if email is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Enter the corrected email address"
+        )
+    problem = email_problem(email)
+    if problem:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"That email address cannot be used: {problem}",
+        )
+    previous = (voter.email or "").strip() or None
+    if previous is not None and previous.lower() == email.lower():
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "That is already the address on this record"
+        )
+
+    voter.email = email
+    record_audit(
+        db, action="register.email_corrected", election_id=election.id, actor_id=profile.id,
+        entity="voter", entity_id=voter.voter_id, ip_address=client_ip(request),
+        detail={
+            "voter_id": voter.voter_id,
+            "previous": previous,
+            "new": email,
+            "note": (payload.note or "").strip() or None,
+            "register_locked": bool(election.locked_at),
+        },
+    )
+    db.commit()
+    return {
+        "voter": {
+            "voter_id": voter.voter_id,
+            "full_name": voter.full_name,
+            "email": mask_email(email),
+        },
+        "previous_email": mask_email(previous) if previous else None,
+        "register_locked": bool(election.locked_at),
+        "usage": "Send the notice to the new address with Resend to one member.",
     }

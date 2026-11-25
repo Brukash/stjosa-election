@@ -149,6 +149,14 @@ class NotificationResend(BaseModel):
     voter: str = Field(min_length=1, max_length=200)
 
 
+class EmailCorrection(BaseModel):
+    """One member's corrected email address, with an optional audit note."""
+
+    voter: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=254)
+    note: str | None = Field(default=None, max_length=300)
+
+
 class VoterVerifyRequest(BaseModel):
     election_id: str | None = None
     voter_id: str
